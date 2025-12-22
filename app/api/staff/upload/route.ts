@@ -1,226 +1,208 @@
 import { NextRequest, NextResponse } from "next/server";
-import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { google } from "googleapis";
-import fs from "fs";
-import path from "path";
 import { Readable } from "stream";
+import { supabaseAdmin } from "@/lib/supabaseAdmin";
 
 export async function POST(req: NextRequest) {
   try {
+    /* ===============================
+       1️⃣ AUTH CHECK
+    =============================== */
+    const {
+      data: { user },
+    } = await supabaseAdmin.auth.getUser();
+
+    if (!user) {
+      return NextResponse.json(
+        { error: "Unauthorized" },
+        { status: 401 }
+      );
+    }
+
+    /* ===============================
+       2️⃣ PARSE FORM DATA
+    =============================== */
     const formData = await req.formData();
-    
-    // Get staff ID and document type
     const staffId = formData.get("staffId") as string;
     const field = formData.get("field") as string;
     const file = formData.get("file") as File;
-    
+
     if (!staffId || !field || !file) {
       return NextResponse.json(
-        { error: "Missing required fields: staffId, field, or file" },
+        { error: "Missing required fields" },
         { status: 400 }
       );
     }
 
-    // Check if staff exists
-    const { data: staff, error: staffError } = await supabaseAdmin
+    /* ===============================
+       3️⃣ FETCH STAFF
+    =============================== */
+    const { data: staff } = await supabaseAdmin
       .from("staff")
-      .select("id, name")
+      .select("id, name, documents")
       .eq("id", staffId)
       .single();
 
-    if (staffError || !staff) {
+    if (!staff) {
       return NextResponse.json(
         { error: "Staff member not found" },
         { status: 404 }
       );
     }
 
+    /* ===============================
+       4️⃣ GET GOOGLE TOKEN (DB)
+    =============================== */
+    const { data: tokenRow } = await supabaseAdmin
+      .from("google_tokens")
+      .select("*")
+      .eq("provider", "google")
+      .limit(1)
+      .single();
+
     let fileUrl = "";
-    
-    // Upload to Google Drive
+
     try {
-      const tokenPath = path.join(process.cwd(), "google-token.json");
-      if (!fs.existsSync(tokenPath)) {
-        return NextResponse.json({ error: "Google login required" }, { status: 401 });
+      if (!tokenRow?.access_token) {
+        throw new Error("Google Drive not connected");
       }
 
-      const tokens = JSON.parse(fs.readFileSync(tokenPath, "utf-8"));
-
+      /* ===============================
+         5️⃣ GOOGLE AUTH
+      =============================== */
       const auth = new google.auth.OAuth2(
         process.env.GOOGLE_CLIENT_ID!,
         process.env.GOOGLE_CLIENT_SECRET!,
         process.env.GOOGLE_REDIRECT_URI!
       );
 
-      auth.setCredentials(tokens);
+      auth.setCredentials({
+        access_token: tokenRow.access_token,
+        refresh_token: tokenRow.refresh_token,
+        expiry_date: tokenRow.expiry_date,
+      });
+
       const drive = google.drive({ version: "v3", auth });
 
-      // Convert file to buffer
+      /* ===============================
+         6️⃣ FILE PREP
+      =============================== */
       const buffer = Buffer.from(await file.arrayBuffer());
       const stream = new Readable();
       stream.push(buffer);
       stream.push(null);
 
-      // Generate filename
       const ext = file.name.split(".").pop() || "jpg";
-      const cleanName = (staff.name || "staff").replace(/\s+/g, "_");
-      const timestamp = Date.now();
-      const fileName = `${cleanName}_${field}_${timestamp}.${ext}`;
+      const cleanName = staff.name.replace(/\s+/g, "_");
+      const fileName = `${cleanName}_${field}_${Date.now()}.${ext}`;
 
-      // Create folder path in Google Drive
-      const folderName = "Staff_Documents";
-      let folderId = process.env.GOOGLE_DRIVE_STAFF_FOLDER_ID;
-      
-      // Create folder if not exists
-      if (!folderId) {
-        const folderResponse = await drive.files.create({
-          requestBody: {
-            name: folderName,
-            mimeType: "application/vnd.google-apps.folder",
-          },
-        });
-        folderId = folderResponse.data.id;
-      }
-
-      // Upload file to Google Drive
-      const response = await drive.files.create({
+      /* ===============================
+         7️⃣ UPLOAD TO DRIVE
+      =============================== */
+      const uploadRes = await drive.files.create({
         requestBody: {
           name: fileName,
-          parents: folderId ? [folderId] : undefined,
-          description: `Staff document: ${field} for ${staff.name}`,
+          parents: process.env.GOOGLE_DRIVE_STAFF_FOLDER_ID
+            ? [process.env.GOOGLE_DRIVE_STAFF_FOLDER_ID]
+            : undefined,
         },
         media: {
-          body: stream,
           mimeType: file.type,
+          body: stream,
         },
       });
 
-      const fileId = response.data.id;
+      const fileId = uploadRes.data.id!;
 
-      // Make the file publicly viewable
       await drive.permissions.create({
-        fileId: fileId,
+        fileId,
         requestBody: {
-          role: 'reader',
-          type: 'anyone',
+          role: "reader",
+          type: "anyone",
         },
       });
 
-      // Get the public URL
-      const fileInfo = await drive.files.get({
-        fileId: fileId,
-        fields: 'webViewLink, webContentLink',
-      });
+      fileUrl = `https://drive.google.com/file/d/${fileId}/view`;
 
-      fileUrl = fileInfo.data.webViewLink || `https://drive.google.com/file/d/${fileId}/view`;
-      
-    } catch (uploadErr: any) {
-      console.error("Google Drive upload error:", uploadErr);
-      
-      // Fallback: Try to upload to Supabase Storage
-      try {
-        const fileExt = file.name.split(".").pop();
-        const fileName = `${staffId}_${field}_${Date.now()}.${fileExt}`;
-        const filePath = `staff/${staffId}/${field}/${fileName}`;
-        
-        const { data, error } = await supabaseAdmin.storage
-          .from("staff-documents")
-          .upload(filePath, file);
-        
-        if (error) throw error;
-        
-        // Get public URL
-        const { data: urlData } = supabaseAdmin.storage
-          .from("staff-documents")
-          .getPublicUrl(filePath);
-        
-        fileUrl = urlData.publicUrl;
-        
-      } catch (storageErr: any) {
-        console.error("Supabase storage upload error:", storageErr);
+    } catch (driveErr) {
+      /* ===============================
+         8️⃣ FALLBACK → SUPABASE STORAGE
+      =============================== */
+      const ext = file.name.split(".").pop();
+      const storagePath = `staff/${staffId}/${field}/${Date.now()}.${ext}`;
+
+      const { error: uploadError } = await supabaseAdmin.storage
+        .from("staff-documents")
+        .upload(storagePath, file);
+
+      if (uploadError) {
+        console.error("Storage upload error:", uploadError);
         return NextResponse.json(
-          { error: "File upload failed to both Google Drive and Supabase Storage" },
+          { error: "Upload failed" },
           { status: 500 }
         );
       }
+
+      const { data } = supabaseAdmin.storage
+        .from("staff-documents")
+        .getPublicUrl(storagePath);
+
+      fileUrl = data.publicUrl;
     }
 
-    // Update staff record in database
-    const { error: updateError } = await supabaseAdmin
+    /* ===============================
+       9️⃣ UPDATE STAFF TABLE
+    =============================== */
+    await supabaseAdmin
       .from("staff")
       .update({ [field]: fileUrl })
       .eq("id", staffId);
 
-    if (updateError) {
-      console.error("Database update error:", updateError);
-      return NextResponse.json(
-        { error: "Failed to update staff record" },
-        { status: 500 }
-      );
-    }
-
-    // Add to documents array if it's a document field
+    /* ===============================
+       🔟 UPDATE DOCUMENTS ARRAY
+    =============================== */
     if (field.includes("_url")) {
-      const documentName = field.replace("_url", "").replace("_", " ").toUpperCase();
-      
-      // Get current documents array
-      const { data: currentStaff } = await supabaseAdmin
-        .from("staff")
-        .select("documents")
-        .eq("id", staffId)
-        .single();
-      
-      const currentDocuments = currentStaff?.documents || [];
-      
-      // Remove existing document of same type
-      const filteredDocuments = currentDocuments.filter(
-        (doc: any) => doc.type !== field
-      );
-      
-      // Add new document
-      const newDocument = {
+      const filteredDocs =
+        (staff.documents || []).filter((d: any) => d.type !== field);
+
+      filteredDocs.push({
         type: field,
-        name: documentName,
+        name: field.replace("_url", "").toUpperCase(),
         url: fileUrl,
         uploaded_at: new Date().toISOString(),
         file_name: file.name,
         file_size: file.size,
         mime_type: file.type,
-      };
-      
+      });
+
       await supabaseAdmin
         .from("staff")
-        .update({
-          documents: [...filteredDocuments, newDocument]
-        })
+        .update({ documents: filteredDocs })
         .eq("id", staffId);
     }
 
-    // Log the upload
-    await supabaseAdmin
-      .from("audit_log")
-      .insert({
-        action: "staff_document_upload",
-        details: {
-          staff_id: staffId,
-          staff_name: staff.name,
-          document_type: field,
-          file_name: file.name,
-          file_size: file.size,
-          file_type: file.type,
-          upload_time: new Date().toISOString(),
-        },
-      });
+    /* ===============================
+       1️⃣1️⃣ AUDIT LOG
+    =============================== */
+    await supabaseAdmin.from("audit_log").insert({
+      action: "staff_document_upload",
+      details: {
+        staff_id: staffId,
+        field,
+        file_name: file.name,
+        uploaded_by: user.id,
+        uploaded_at: new Date().toISOString(),
+      },
+    });
 
     return NextResponse.json({
       success: true,
       url: fileUrl,
-      field: field,
-      message: `Successfully uploaded ${field} document`,
+      field,
     });
 
   } catch (err: any) {
-    console.error("Upload error:", err);
+    console.error("UPLOAD ERROR:", err);
     return NextResponse.json(
       { error: err.message || "Upload failed" },
       { status: 500 }
@@ -228,59 +210,46 @@ export async function POST(req: NextRequest) {
   }
 }
 
-// Optional: DELETE endpoint to remove uploaded files
+/* =====================================
+   DELETE ENDPOINT
+===================================== */
 export async function DELETE(req: NextRequest) {
   try {
-    const { staffId, field, url } = await req.json();
-    
+    const { staffId, field } = await req.json();
+
     if (!staffId || !field) {
       return NextResponse.json(
-        { error: "Missing required fields" },
+        { error: "Missing fields" },
         { status: 400 }
       );
     }
 
-    // Update staff record to remove the URL
-    const { error: updateError } = await supabaseAdmin
+    const { data: staff } = await supabaseAdmin
+      .from("staff")
+      .select("documents")
+      .eq("id", staffId)
+      .single();
+
+    await supabaseAdmin
       .from("staff")
       .update({ [field]: null })
       .eq("id", staffId);
 
-    if (updateError) {
-      console.error("Database update error:", updateError);
-      return NextResponse.json(
-        { error: "Failed to update staff record" },
-        { status: 500 }
+    if (field.includes("_url") && staff?.documents) {
+      const filtered = staff.documents.filter(
+        (d: any) => d.type !== field
       );
-    }
 
-    // Remove from documents array if applicable
-    if (field.includes("_url")) {
-      const { data: currentStaff } = await supabaseAdmin
+      await supabaseAdmin
         .from("staff")
-        .select("documents")
-        .eq("id", staffId)
-        .single();
-      
-      if (currentStaff?.documents) {
-        const filteredDocuments = currentStaff.documents.filter(
-          (doc: any) => doc.type !== field
-        );
-        
-        await supabaseAdmin
-          .from("staff")
-          .update({ documents: filteredDocuments })
-          .eq("id", staffId);
-      }
+        .update({ documents: filtered })
+        .eq("id", staffId);
     }
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully removed ${field} document`,
-    });
+    return NextResponse.json({ success: true });
 
   } catch (err: any) {
-    console.error("Delete error:", err);
+    console.error("DELETE ERROR:", err);
     return NextResponse.json(
       { error: err.message || "Delete failed" },
       { status: 500 }
