@@ -88,16 +88,13 @@ export default function VendorBillsPage() {
   const vendorInputRef = useRef<HTMLInputElement>(null);
 
   const COMPANY_INFO = {
-    name: "Mountain Pass Resort",
-    address: "123 Hilltop Avenue, Munnar, Kerala 685612",
+    name: "Mountain Pass Residency",
+    address: "Anamari, Vazhikkadavu, Kerala 679333",
     phone: "+91 98765 43210",
     email: "accounts@mountainpassresort.com",
     website: "www.mountainpassresort.com",
     gstin: "29ABCDE1234F1Z5",
-    pan: "ABCDE1234F",
-    bankName: "State Bank of India",
-    accountNo: "123456789012",
-    ifsc: "SBIN0001234",
+    
   };
 
   useEffect(() => {
