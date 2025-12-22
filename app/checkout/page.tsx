@@ -607,16 +607,23 @@ export default function CheckoutPage() {
     }
   };
 
-  const calculateBill = (guest: GuestRow) => {
-    return calculateBillForHistory(guest, roomCharges[guest.id] || [], selectedGuestRooms[guest.id] || [], now.toISOString());
-  };
+const calculateBill = (guest: GuestRow) => {
+  return calculateBillForHistory(
+    guest, 
+    roomCharges[guest.id] || [], 
+    selectedGuestRooms[guest.id] || [], 
+    now.toISOString()
+  );
+};
 
-  const calculateBillForHistory = (
+const calculateBillForHistory = (
   guest: GuestRow, 
   charges: RoomCharge[], 
   rooms: RoomRow[], 
   checkoutTime: string
 ) => {
+  // Determine if this is a freshen-up booking
+const isFreshenUp = guest.guest_category === 'freshen-up';  
   const checkInTime = new Date(guest.check_in).getTime();
   const checkoutDateTime = new Date(checkoutTime).getTime();
   const hoursStayed = Math.max(0, Math.ceil((checkoutDateTime - checkInTime) / (1000 * 60 * 60)));
@@ -638,7 +645,8 @@ export default function CheckoutPage() {
       basePerDayTotal = clamp(guest.base_amount) / clamp(guest.booked_days);
     }
   }
- const roomBreakdown = rooms.map((r) => {
+  
+  const roomBreakdown = rooms.map((r) => {
     const pricePerDay = r.price_per_day ?? (basePerDayTotal ? basePerDayTotal / defaultRoomCount : 0);
     const subtotal = pricePerDay * clamp(guest.booked_days);
     return {
@@ -649,91 +657,91 @@ export default function CheckoutPage() {
       subtotal: Number(subtotal.toFixed(2)),
     };
   });
-    let baseTotal = 0;
-    let computedTotal = 0;
-    let extraChargeRate = 200; // Default extra hour rate
-    let extraCharge = 0;
+  
+  let baseTotal = 0;
+  let computedTotal = 0;
+  let extraChargeRate = 200; // Default extra hour rate
+  let extraCharge = 0;
 
-    if (isFreshenUp) {
-      // For freshen-up bookings, base amount should be the hourly rate
-      if (guest.base_amount != null) {
-        baseTotal = clamp(Number(guest.base_amount));
-      } else {
-        baseTotal = roomBreakdown.reduce((s, r) => s + r.subtotal, 0);
-      }
-      computedTotal = baseTotal;
-      
-      // For freshen-up, extra hours should be at the same hourly rate
-      if (guest.booked_days > 0 && guest.base_amount != null) {
-        const hourlyRate = clamp(Number(guest.base_amount)) / (clamp(guest.booked_days) * 24);
-        extraCharge = extraHours * hourlyRate;
-        extraChargeRate = hourlyRate;
-      } else if (extraHours > 0) {
-        extraCharge = extraHours * 200; // Fallback to default rate
-      }
-      computedTotal += extraCharge;
+  if (isFreshenUp) {
+    // For freshen-up bookings, base amount should be the hourly rate
+    if (guest.base_amount != null) {
+      baseTotal = clamp(Number(guest.base_amount));
     } else {
-      // Regular booking
-      baseTotal =
-        guest.base_amount != null
-          ? clamp(Number(guest.base_amount)) * clamp(guest.booked_days)
-          : roomBreakdown.reduce((s, r) => s + r.subtotal, 0);
-
-      extraCharge = extraHours * extraChargeRate;
-      computedTotal = baseTotal + extraCharge;
+      baseTotal = roomBreakdown.reduce((s, r) => s + r.subtotal, 0);
     }
-
-    // Calculate restaurant charges from room_charges ONLY
-    const restaurantCharges = charges
-      .filter(c => c.category === 'restaurant')
-      .reduce((sum, c) => sum + c.amount, 0);
-
-    // Get meal plan charge from guest data (not for freshen-up)
-    const mealPlanCharge = (isFreshenUp || guest.guest_category === 'complimentary') ? 0 : (guest.meal_plan_charge || 0);
-
-    // Calculate additional charges (discounts/damages)
-    const additionalChargesForGuest = additionalCharges[guest.id] || [];
-    const totalDiscount = additionalChargesForGuest
-      .filter(c => c.type === 'discount')
-      .reduce((sum, c) => sum + c.amount, 0);
+    computedTotal = baseTotal;
     
-    const totalDamageCharges = additionalChargesForGuest
-      .filter(c => c.type === 'damage')
-      .reduce((sum, c) => sum + c.amount, 0);
+    // For freshen-up, extra hours should be at the same hourly rate
+    if (guest.booked_days > 0 && guest.base_amount != null) {
+      const hourlyRate = clamp(Number(guest.base_amount)) / (clamp(guest.booked_days) * 24);
+      extraCharge = extraHours * hourlyRate;
+      extraChargeRate = hourlyRate;
+    } else if (extraHours > 0) {
+      extraCharge = extraHours * 200; // Fallback to default rate
+    }
+    computedTotal += extraCharge;
+  } else {
+    // Regular booking
+    baseTotal =
+      guest.base_amount != null
+        ? clamp(Number(guest.base_amount)) * clamp(guest.booked_days)
+        : roomBreakdown.reduce((s, r) => s + r.subtotal, 0);
 
-    // Use historical discount/damage if available
-    const finalDiscount = guest.discount_amount || totalDiscount;
-    const finalDamageCharges = guest.damage_charges || totalDamageCharges;
+    extraCharge = extraHours * extraChargeRate;
+    computedTotal = baseTotal + extraCharge;
+  }
 
-    // Calculate balance after advance
-    const advance = advancePayments[guest.id] ?? guest.advance_payment ?? 0;
-    const totalBeforeAdjustments = computedTotal + restaurantCharges + finalDamageCharges + mealPlanCharge;
-    const totalAfterDiscount = Math.max(0, totalBeforeAdjustments - finalDiscount);
-    const balanceDue = Math.max(0, totalAfterDiscount - advance);
+  // Calculate restaurant charges from room_charges ONLY
+  const restaurantCharges = charges
+    .filter(c => c.category === 'restaurant')
+    .reduce((sum, c) => sum + c.amount, 0);
 
-    return {
-      hoursStayed,
-      extraHours,
-      extraChargeRate,
-      defaultExtraCharge: extraCharge,
-      baseTotal: Number(baseTotal.toFixed(2)),
-      computedTotal: Number(computedTotal),
-      restaurantCharges: Number(restaurantCharges.toFixed(2)),
-      mealPlanCharge: Number(mealPlanCharge.toFixed(2)),
-      totalDiscount: Number(finalDiscount.toFixed(2)),
-      totalDamageCharges: Number(finalDamageCharges.toFixed(2)),
-      totalBeforeAdjustments: Number(totalBeforeAdjustments.toFixed(2)),
-      totalAfterDiscount: Number(totalAfterDiscount.toFixed(2)),
-      advanceAmount: advance,
-      balanceDue: Number(balanceDue.toFixed(2)),
-      roomBreakdown,
-      guestCharges: charges,
-      additionalCharges: additionalChargesForGuest,
-      checkoutTime: checkoutTime,
-      isFreshenUp
-    };
+  // Get meal plan charge from guest data (not for freshen-up)
+  const mealPlanCharge = (isFreshenUp || guest.guest_category === 'complimentary') ? 0 : (guest.meal_plan_charge || 0);
+
+  // Calculate additional charges (discounts/damages)
+  const additionalChargesForGuest = additionalCharges[guest.id] || [];
+  const totalDiscount = additionalChargesForGuest
+    .filter(c => c.type === 'discount')
+    .reduce((sum, c) => sum + c.amount, 0);
+  
+  const totalDamageCharges = additionalChargesForGuest
+    .filter(c => c.type === 'damage')
+    .reduce((sum, c) => sum + c.amount, 0);
+
+  // Use historical discount/damage if available
+  const finalDiscount = guest.discount_amount || totalDiscount;
+  const finalDamageCharges = guest.damage_charges || totalDamageCharges;
+
+  // Calculate balance after advance
+  const advance = advancePayments[guest.id] ?? guest.advance_payment ?? 0;
+  const totalBeforeAdjustments = computedTotal + restaurantCharges + finalDamageCharges + mealPlanCharge;
+  const totalAfterDiscount = Math.max(0, totalBeforeAdjustments - finalDiscount);
+  const balanceDue = Math.max(0, totalAfterDiscount - advance);
+
+  return {
+    hoursStayed,
+    extraHours,
+    extraChargeRate,
+    defaultExtraCharge: extraCharge,
+    baseTotal: Number(baseTotal.toFixed(2)),
+    computedTotal: Number(computedTotal.toFixed(2)),
+    restaurantCharges: Number(restaurantCharges.toFixed(2)),
+    mealPlanCharge: Number(mealPlanCharge.toFixed(2)),
+    totalDiscount: Number(finalDiscount.toFixed(2)),
+    totalDamageCharges: Number(finalDamageCharges.toFixed(2)),
+    totalBeforeAdjustments: Number(totalBeforeAdjustments.toFixed(2)),
+    totalAfterDiscount: Number(totalAfterDiscount.toFixed(2)),
+    advanceAmount: advance,
+    balanceDue: Number(balanceDue.toFixed(2)),
+    roomBreakdown,
+    guestCharges: charges,
+    additionalCharges: additionalChargesForGuest,
+    checkoutTime: checkoutTime,
+    isFreshenUp  // Make sure to return this
   };
-
+};
   // Add payment split
   const addPaymentSplit = (guestId: string) => {
     const splits = paymentSplits[guestId] ?? [];

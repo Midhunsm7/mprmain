@@ -1,87 +1,87 @@
-import { google } from "googleapis"
-import { NextResponse } from "next/server"
-import { Readable } from "stream"
-import { supabaseServer } from "@/lib/supabaseServer"
+import { NextRequest, NextResponse } from "next/server";
+import { google } from "googleapis";
+import { Readable } from "stream";
+import { createClient } from "@supabase/supabase-js";
 
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    /* 1️⃣ Get logged in user */
-    const {
-      data: { user },
-    } = await supabaseServer.auth.getUser()
+    const formData = await req.formData();
+    const file = formData.get("file") as File;
+    const vendorName = formData.get("vendorName") as string;
+    const billDate = formData.get("billDate") as string;
 
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    if (!file) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
     }
 
-    /* 2️⃣ Get Google token from DB */
-    const { data: tokenRow } = await supabaseServer
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { data: tokenRow } = await supabase
       .from("google_tokens")
       .select("*")
-      .eq("user_id", user.id)
-      .single()
+      .eq("provider", "google")
+      .single();
 
     if (!tokenRow?.access_token) {
       return NextResponse.json(
-        { error: "Google not connected" },
+        { error: "Google Drive not connected" },
         { status: 401 }
-      )
+      );
     }
 
-    /* 3️⃣ Parse form data */
-    const data = await req.formData()
-    const file = data.get("file") as File
-    const rawName = (data.get("vendorName") as string) || "Vendor"
-    const billDate =
-      (data.get("billDate") as string) ||
-      new Date().toISOString().split("T")[0]
-
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 })
-    }
-
-    /* 4️⃣ Prepare filename */
-    const cleanVendorName = rawName.replace(/\s+/g, "_")
-    const extension = file.name.split(".").pop()
-    const customFileName = `${cleanVendorName}_${billDate}.${extension}`
-
-    /* 5️⃣ Google Auth */
     const auth = new google.auth.OAuth2(
-      process.env.GOOGLE_CLIENT_ID,
-      process.env.GOOGLE_CLIENT_SECRET,
-      process.env.GOOGLE_REDIRECT_URI
-    )
+      process.env.GOOGLE_CLIENT_ID!,
+      process.env.GOOGLE_CLIENT_SECRET!,
+      process.env.GOOGLE_REDIRECT_URI!
+    );
 
     auth.setCredentials({
       access_token: tokenRow.access_token,
       refresh_token: tokenRow.refresh_token,
       expiry_date: tokenRow.expiry_date,
-    })
+    });
 
-    const drive = google.drive({ version: "v3", auth })
+    const drive = google.drive({ version: "v3", auth });
 
-    /* 6️⃣ Upload stream */
-    const buffer = Buffer.from(await file.arrayBuffer())
-    const stream = new Readable()
-    stream.push(buffer)
-    stream.push(null)
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const stream = new Readable();
+    stream.push(buffer);
+    stream.push(null);
 
-    const response = await drive.files.create({
+    const cleanVendor = vendorName.replace(/\s+/g, "_");
+    const ext = file.name.split(".").pop();
+    const fileName = `${cleanVendor}_${billDate}.${ext}`;
+
+    const uploadRes = await drive.files.create({
       requestBody: {
-        name: customFileName,
+        name: fileName,
+        parents: process.env.GOOGLE_DRIVE_VENDOR_FOLDER_ID
+          ? [process.env.GOOGLE_DRIVE_VENDOR_FOLDER_ID]
+          : undefined,
       },
       media: {
         mimeType: file.type,
         body: stream,
       },
-    })
+    });
 
-    const fileId = response.data.id
-    const fileUrl = `https://drive.google.com/file/d/${fileId}/view`
+    const fileId = uploadRes.data.id!;
 
-    return NextResponse.json({ url: fileUrl })
+    await drive.permissions.create({
+      fileId,
+      requestBody: { role: "reader", type: "anyone" },
+    });
+
+    return NextResponse.json({
+      success: true,
+      url: `https://drive.google.com/file/d/${fileId}/view`,
+    });
+
   } catch (err) {
-    console.error("UPLOAD ERROR:", err)
-    return NextResponse.json({ error: "Upload failed" }, { status: 500 })
+    console.error("Upload error:", err);
+    return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 }

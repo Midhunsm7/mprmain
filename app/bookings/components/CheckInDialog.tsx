@@ -31,7 +31,7 @@ interface Props {
     idProof: string;
     phone: string;
     days: number;
-    manualPrice: string;
+    manualPrice: string | null;
     passportImage: File | null;
     pax: number;
     mealPlan: string;
@@ -40,6 +40,9 @@ interface Props {
     companyName: string;
     guestCategory: string;
     purposeOfVisit: string;
+    advanceAmount: number;
+    bookingType: string;
+    hours: number;
   }) => void;
   calculatedTotal: number;
 }
@@ -76,6 +79,7 @@ const GUEST_CATEGORIES = [
   { value: "group", label: "👥 Group" },
   { value: "regular", label: "⭐ Regular" },
   { value: "vip", label: "👑 VIP" },
+  { value: "freshen-up", label: "🚿 Freshen-up" },
   { value: "other", label: "📋 Other" },
 ];
 
@@ -110,6 +114,8 @@ export default function CheckInDialog({
     companyName: "",
     guestCategory: "walk-in",
     purposeOfVisit: "leisure",
+    advanceAmount: 0,
+    hours: 0,
   });
 
   const [passportImage, setPassportImage] = useState<File | null>(null);
@@ -149,6 +155,14 @@ export default function CheckInDialog({
         mealPlan: "none",
       }));
     }
+    
+    // For freshen-up bookings, calculate hours from days
+    if (form.guestCategory === "freshen-up") {
+      setForm((prev) => ({
+        ...prev,
+        hours: prev.days * 24,
+      }));
+    }
   }, [form.guestCategory]);
 
   // Function to lookup guest by phone
@@ -175,7 +189,7 @@ export default function CheckInDialog({
             gstin: data.gstin || "",
             companyName: data.company_name || "",
             guestCategory: data.guest_category || "walk-in",
-            purposeOfVisit: "leisure", // Reset purpose of visit
+            purposeOfVisit: "leisure",
           }));
 
           if (data.status === "checked-in") {
@@ -280,17 +294,35 @@ export default function CheckInDialog({
       setForm((prev) => ({ ...prev, manualPrice: "0" }));
     }
 
+    // Determine booking type based on guest category
+    const bookingType = form.guestCategory === 'freshen-up' ? 'freshen-up' : 'regular';
+    
+    // Check if this is a freshen-up booking
+    const isFreshenUp = form.guestCategory === 'freshen-up';
+    
+    // For freshen-up, calculate hours from days
+    const hours = isFreshenUp ? form.days * 24 : 0;
+
     // Pass all data to parent - parent will call the merged check-in API
-onConfirm({
-  ...form,
-  passportImage,
-  mealPlanCharge,
-  purposeOfVisit: form.purposeOfVisit,
-  advanceAmount: form.advanceAmount,
-  bookingType,
-  hours: isFreshenUp ? form.hours : 0,
-  manualPrice: form.manualPrice || null, // ✅ Already present
-});
+    onConfirm({
+      name: form.name,
+      address: form.address,
+      idProof: form.idProof,
+      phone: form.phone,
+      days: form.days,
+      manualPrice: form.manualPrice || null,
+      passportImage,
+      pax: form.pax,
+      mealPlan: form.mealPlan,
+      mealPlanCharge,
+      gstin: form.gstin,
+      companyName: form.companyName,
+      guestCategory: form.guestCategory,
+      purposeOfVisit: form.purposeOfVisit,
+      advanceAmount: form.advanceAmount,
+      bookingType: bookingType,
+      hours: hours,
+    });
 
     // Reset form
     resetForm();
@@ -311,6 +343,8 @@ onConfirm({
       companyName: "",
       guestCategory: "walk-in",
       purposeOfVisit: "leisure",
+      advanceAmount: 0,
+      hours: 0,
     });
     setPassportImage(null);
     setPhoneTouched(false);
@@ -324,25 +358,26 @@ onConfirm({
   };
 
   // Handle pax input change - fully editable
- const handlePaxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-  const value = e.target.value
-  
-  // Allow empty input
-  if (value === '') {
-    setForm({ ...form, pax: '' as any })
-  } else {
-    // Remove all non-numeric characters
-    const numericValue = value.replace(/\D/g, '')
+  const handlePaxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
     
-    // If there's a value, convert to number
-    if (numericValue) {
-      const numValue = parseInt(numericValue, 10)
-      // Limit to reasonable number (max 20)
-      const finalValue = Math.min(Math.max(numValue, 1), 20)
-      setForm({ ...form, pax: finalValue })
+    // Allow empty input
+    if (value === '') {
+      setForm({ ...form, pax: '' as any });
+    } else {
+      // Remove all non-numeric characters
+      const numericValue = value.replace(/\D/g, '');
+      
+      // If there's a value, convert to number
+      if (numericValue) {
+        const numValue = parseInt(numericValue, 10);
+        // Limit to reasonable number (max 20)
+        const finalValue = Math.min(Math.max(numValue, 1), 20);
+        setForm({ ...form, pax: finalValue });
+      }
     }
-  }
-}
+  };
+
   // Handle manual price change - lock to 0 for complimentary
   const handleManualPriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const value = e.target.value;
@@ -354,26 +389,36 @@ onConfirm({
       setForm({ ...form, manualPrice: numValue });
     }
   };
-  async function handleCheckIn() {
-  const res = await fetch("/api/check-in", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(formData),
-  });
 
-  const data = await res.json();
+  // Handle days change - also update hours for freshen-up
+  const handleDaysChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const days = Math.max(1, Number(e.target.value));
+    setForm({
+      ...form,
+      days: days,
+      hours: form.guestCategory === "freshen-up" ? days * 24 : 0,
+    });
+  };
 
-  if (!res.ok) {
-    alert(data.error || "Check-in failed");
-    return;
-  }
-
-  // ✅ OPEN GRC IN NEW TAB
-  window.open(
-    `/guest-registration?booking_id=${data.booking_id}`,
-    "_blank"
-  );
-}
+  // Handle guest category change
+  const handleGuestCategoryChange = (value: string) => {
+    setForm((prev) => {
+      const newForm = { ...prev, guestCategory: value };
+      
+      // Reset manual price for complimentary
+      if (value === "complimentary") {
+        newForm.manualPrice = "0";
+        newForm.mealPlan = "none";
+      }
+      
+      // Update hours for freshen-up
+      if (value === "freshen-up") {
+        newForm.hours = newForm.days * 24;
+      }
+      
+      return newForm;
+    });
+  };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -456,9 +501,7 @@ onConfirm({
               <Label htmlFor="guestCategory">Guest Category *</Label>
               <Select
                 value={form.guestCategory}
-                onValueChange={(value) =>
-                  setForm({ ...form, guestCategory: value })
-                }
+                onValueChange={handleGuestCategoryChange}
                 disabled={phoneLookupLoading}
               >
                 <SelectTrigger className="border border-black">
@@ -592,6 +635,23 @@ onConfirm({
             </div>
           </div>
 
+          {/* Advance Amount */}
+          <div>
+            <Label htmlFor="advanceAmount">Advance Amount (₹)</Label>
+            <Input
+              id="advanceAmount"
+              type="number"
+              value={form.advanceAmount}
+              onChange={(e) => 
+                setForm({ ...form, advanceAmount: Number(e.target.value) || 0 })
+              }
+              className="border border-black"
+              placeholder="Advance amount paid"
+              min="0"
+              disabled={phoneLookupLoading}
+            />
+          </div>
+
           {/* Meal Plan Selection - Disabled for complimentary */}
           <div
             className={`p-4 rounded-lg border ${
@@ -659,15 +719,15 @@ onConfirm({
                 type="number"
                 min={1}
                 value={form.days}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    days: Math.max(1, Number(e.target.value)),
-                  })
-                }
+                onChange={handleDaysChange}
                 className="border border-black"
                 disabled={phoneLookupLoading}
               />
+              {form.guestCategory === "freshen-up" && (
+                <p className="text-xs text-gray-500 mt-1">
+                  {form.days} day(s) = {form.days * 24} hours
+                </p>
+              )}
             </div>
 
             <div>
@@ -737,6 +797,14 @@ onConfirm({
                     </span>
                   </div>
                 )}
+              {form.advanceAmount > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-700">Advance Paid:</span>
+                  <span className="font-medium text-blue-700">
+                    -₹{form.advanceAmount.toLocaleString("en-IN")}
+                  </span>
+                </div>
+              )}
               <div className="border-t pt-2 flex justify-between">
                 <span className="font-bold text-lg text-gray-900">
                   Total Amount:
@@ -753,8 +821,29 @@ onConfirm({
                     : `₹${totalWithMealPlan.toLocaleString("en-IN")}`}
                 </span>
               </div>
+              <div className="border-t pt-2 flex justify-between">
+                <span className="font-bold text-lg text-gray-900">
+                  Balance Due:
+                </span>
+                <span className="font-bold text-xl text-blue-700">
+                  ₹{Math.max(0, totalWithMealPlan - form.advanceAmount).toLocaleString("en-IN")}
+                </span>
+              </div>
             </div>
           </div>
+
+          {/* Freshen-up Notice */}
+          {form.guestCategory === "freshen-up" && (
+            <div className="p-3 bg-cyan-50 border border-cyan-200 rounded-lg">
+              <p className="text-sm text-cyan-800 font-medium flex items-center gap-2">
+                <span>🚿</span>
+                <span>Freshen-up Booking</span>
+              </p>
+              <p className="text-xs text-cyan-700 mt-1">
+                This is an hourly booking for {form.days * 24} hours. Charges will be calculated based on hourly rates.
+              </p>
+            </div>
+          )}
 
           {/* Complimentary Notice */}
           {form.guestCategory === "complimentary" && (
@@ -764,8 +853,7 @@ onConfirm({
                 <span>Complimentary Stay Notice</span>
               </p>
               <p className="text-xs text-yellow-700 mt-1">
-                This guest is marked as complimentary. All charges will be set
-                to ₹0.
+                This guest is marked as complimentary. All charges will be set to ₹0.
               </p>
             </div>
           )}
@@ -843,6 +931,8 @@ onConfirm({
               className={`border ${
                 form.guestCategory === "complimentary"
                   ? "border-yellow-600 bg-yellow-600 text-white hover:bg-yellow-700"
+                  : form.guestCategory === "freshen-up"
+                  ? "border-cyan-600 bg-cyan-600 text-white hover:bg-cyan-700"
                   : "border-black bg-black text-white hover:bg-white hover:text-black"
               }`}
               disabled={
@@ -864,6 +954,8 @@ onConfirm({
                 </>
               ) : form.guestCategory === "complimentary" ? (
                 "🎁 Check-In (Complimentary)"
+              ) : form.guestCategory === "freshen-up" ? (
+                "🚿 Check-In (Freshen-up)"
               ) : (
                 "Check-In Guest"
               )}

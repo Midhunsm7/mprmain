@@ -413,121 +413,120 @@ const handleCheckOut = async (guest: Guest) => {
 
   /* ===================== ENHANCED GUEST LIST WITH PINS ===================== */
 
-  const EnhancedGuestList = ({
-    guests,
-    onCheckout,
-  }: {
-    guests: Guest[];
-    onCheckout: (guest: Guest) => void;
-  }) => {
-    const [showGuestPins, setShowGuestPins] = useState<Record<string, boolean>>(
-      {}
-    );
+const EnhancedGuestList = ({
+  guests,
+  onCheckout,
+}: {
+  guests: Guest[];
+  onCheckout: (guest: Guest) => void;
+}) => {
+  const [showGuestPins, setShowGuestPins] = useState<Record<string, boolean>>(
+    {}
+  );
 
-    const toggleGuestPin = (guestId: string) => {
-      setShowGuestPins((prev) => ({
-        ...prev,
-        [guestId]: !prev[guestId],
-      }));
-    };
-
-    const copyGuestPin = async (pin: string, guestId: string) => {
-      try {
-        await navigator.clipboard.writeText(pin);
-        alert("PIN copied to clipboard!");
-      } catch (err) {
-        console.error("Failed to copy PIN:", err);
-      }
-    };
-
-    return (
-      <div className="space-y-3">
-        {guests.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
-            No guests currently checked in
-          </div>
-        ) : (
-          guests.map((guest) => {
-            const guestRooms = rooms.filter((r) => r.guestId === guest.id);
-            const displayPin = showGuestPins[guest.id] ? guest.roomPin : "••••";
-
-            return (
-              <motion.div
-                key={guest.id}
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-gradient-to-r from-slate-50 to-blue-50 rounded-2xl p-4 border border-slate-200"
-              >
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h4 className="font-bold text-slate-900">{guest.name}</h4>
-                    <p className="text-sm text-slate-600">
-                      Rooms: {guestRooms.map((r) => r.name).join(", ")}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => onCheckout(guest)}
-                    className="px-3 py-1 bg-gradient-to-r from-rose-50 to-pink-50 text-rose-700 rounded-xl text-sm font-medium hover:from-rose-100 hover:to-pink-100 transition-all"
-                  >
-                    Checkout
-                  </button>
-                </div>
-
-                <div className="mt-3 pt-3 border-t border-slate-200">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Key className="h-4 w-4 text-blue-600" />
-                      <span className="text-sm font-medium text-slate-700">
-                        Room PIN:
-                      </span>
-                      <span
-                        className={`font-mono text-sm ${
-                          showGuestPins[guest.id]
-                            ? "text-blue-700"
-                            : "text-slate-500"
-                        }`}
-                      >
-                        {displayPin}
-                      </span>
-                    </div>
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => toggleGuestPin(guest.id)}
-                        className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-                        title={
-                          showGuestPins[guest.id] ? "Hide PIN" : "Show PIN"
-                        }
-                      >
-                        {showGuestPins[guest.id] ? (
-                          <EyeOff className="h-4 w-4 text-slate-600" />
-                        ) : (
-                          <Eye className="h-4 w-4 text-slate-600" />
-                        )}
-                      </button>
-                      {guest.roomPin && showGuestPins[guest.id] && (
-                        <button
-                          onClick={() => copyGuestPin(guest.roomPin!, guest.id)}
-                          className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-                          title="Copy PIN"
-                        >
-                          <Copy className="h-4 w-4 text-slate-600" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                  <div className="text-xs text-slate-500 mt-1">
-                    Checked in:{" "}
-                    {new Date(guest.checkInISO).toLocaleDateString()}
-                  </div>
-                </div>
-              </motion.div>
-            );
-          })
-        )}
-      </div>
-    );
+  const toggleGuestPin = (guestId: string) => {
+    setShowGuestPins((prev) => ({
+      ...prev,
+      [guestId]: !prev[guestId],
+    }));
   };
 
+  const copyGuestPin = async (pin: string, guestId: string) => {
+    try {
+      await navigator.clipboard.writeText(pin);
+      alert("PIN copied to clipboard!");
+    } catch (err) {
+      console.error("Failed to copy PIN:", err);
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {guests.length === 0 ? (
+        <div className="text-center py-8 text-gray-500">
+          No guests currently checked in
+        </div>
+      ) : (
+        guests.map((guest) => {
+          const guestRooms = rooms.filter((r) => r.guestId === guest.id);
+          const displayPin = showGuestPins[guest.id] ? guest.roomPin : "••••";
+
+          return (
+            <motion.div
+              key={guest.id} // ADD THIS KEY PROP
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-gradient-to-r from-slate-50 to-blue-50 rounded-2xl p-4 border border-slate-200"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <div>
+                  <h4 className="font-bold text-slate-900">{guest.name}</h4>
+                  <p className="text-sm text-slate-600">
+                    Rooms: {guestRooms.map((r) => r.name).join(", ")}
+                  </p>
+                </div>
+                <button
+                  onClick={() => onCheckout(guest)}
+                  className="px-3 py-1 bg-gradient-to-r from-rose-50 to-pink-50 text-rose-700 rounded-xl text-sm font-medium hover:from-rose-100 hover:to-pink-100 transition-all"
+                >
+                  Checkout
+                </button>
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-slate-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Key className="h-4 w-4 text-blue-600" />
+                    <span className="text-sm font-medium text-slate-700">
+                      Room PIN:
+                    </span>
+                    <span
+                      className={`font-mono text-sm ${
+                        showGuestPins[guest.id]
+                          ? "text-blue-700"
+                          : "text-slate-500"
+                      }`}
+                    >
+                      {displayPin}
+                    </span>
+                  </div>
+                  <div className="flex gap-1">
+                    <button
+                      onClick={() => toggleGuestPin(guest.id)}
+                      className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                      title={
+                        showGuestPins[guest.id] ? "Hide PIN" : "Show PIN"
+                      }
+                    >
+                      {showGuestPins[guest.id] ? (
+                        <EyeOff className="h-4 w-4 text-slate-600" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-slate-600" />
+                      )}
+                    </button>
+                    {guest.roomPin && showGuestPins[guest.id] && (
+                      <button
+                        onClick={() => copyGuestPin(guest.roomPin!, guest.id)}
+                        className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                        title="Copy PIN"
+                      >
+                        <Copy className="h-4 w-4 text-slate-600" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <div className="text-xs text-slate-500 mt-1">
+                  Checked in:{" "}
+                  {new Date(guest.checkInISO).toLocaleDateString()}
+                </div>
+              </div>
+            </motion.div>
+          );
+        })
+      )}
+    </div>
+  );
+};
   /* ===================== UI ===================== */
 
   return (
