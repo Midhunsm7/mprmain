@@ -58,19 +58,24 @@ export async function GET(req: NextRequest) {
 
     console.log("UPSERTING GOOGLE TOKENS");
 
-    const { error } = await supabase.from("google_tokens").upsert({
+const { error } = await supabase
+  .from("google_tokens")
+  .upsert(
+    {
       provider: "google",
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
       expiry_date: tokens.expiry_date,
-      updated_at: new Date().toISOString(),
-    });
-
-    console.log("UPSERT ERROR:", error);
-
-    if (error) {
-      throw error;
+    },
+    {
+      onConflict: "provider", // 🔑 REQUIRED
     }
+  );
+
+if (error) {
+  throw error;
+}
+
 
     /* ===============================
        4️⃣ Redirect back

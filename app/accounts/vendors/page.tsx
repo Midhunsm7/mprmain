@@ -86,16 +86,18 @@ export default function VendorBillsPage() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const vendorInputRef = useRef<HTMLInputElement>(null);
-
-  const COMPANY_INFO = {
-    name: "Mountain Pass Residency",
-    address: "Anamari, Vazhikkadavu, Kerala 679333",
-    phone: "+91 98765 43210",
-    email: "accounts@mountainpassresort.com",
-    website: "www.mountainpassresort.com",
-    gstin: "29ABCDE1234F1Z5",
-    
-  };
+const COMPANY_INFO = {
+  name: "Mountain Pass Residency",
+  address: "Anamari, Vazhikkadavu, Kerala 679333",
+  phone: "+91 98765 43210",
+  email: "accounts@mountainpassresort.com",
+  website: "www.mountainpassresort.com",
+  gstin: "29ABCDE1234F1Z5",
+  pan: "ABCDE1234F", // Add this
+  bankName: "State Bank of India", // Add this
+  accountNo: "123456789012", // Add this
+  ifsc: "SBIN0001234" // Add this
+};
 
   useEffect(() => {
     const d = new Date();
@@ -195,205 +197,220 @@ export default function VendorBillsPage() {
     setVendorAddress("");
   };
 
-  const generatePDF = async () => {
-    if (!vendorName || !amount) {
-      alert("Please enter vendor name and amount first");
-      return;
-    }
+const generatePDF = async () => {
+  if (!vendorName || !amount) {
+    alert("Please enter vendor name and amount first");
+    return;
+  }
 
-    setPdfLoading(true);
+  setPdfLoading(true);
+  
+  try {
+    const { jsPDF } = await import('jspdf');
     
-    try {
-      const { jsPDF } = await import('jspdf');
-      
-      const doc = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4'
-      });
-      
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const margin = 15;
-      const contentWidth = pageWidth - (margin * 2);
-      
-      // Header with Logo
-      doc.setFillColor(240, 240, 240);
-      doc.rect(0, 0, pageWidth, 40, 'F');
-      
-      // Company Details at top center
-      doc.setFontSize(24);
-      doc.setTextColor(50, 100, 150);
-      doc.text("MOUNTAIN PASS", pageWidth / 2, 15, { align: "center" });
-      doc.setFontSize(14);
-      doc.text("RESORT & SPA", pageWidth / 2, 22, { align: "center" });
-      
-      // Company Details
-      doc.setFontSize(9);
-      doc.setTextColor(100, 100, 100);
-      doc.text(COMPANY_INFO.address, pageWidth / 2, 30, { align: "center" });
-      doc.text(`📞 ${COMPANY_INFO.phone} | 📧 ${COMPANY_INFO.email}`, pageWidth / 2, 35, { align: "center" });
-      
-      // Bill Header
-      doc.setFillColor(50, 100, 150);
-      doc.rect(margin, 45, contentWidth, 12, 'F');
-      doc.setFontSize(16);
-      doc.setTextColor(255, 255, 255);
-      doc.text("TAX INVOICE", pageWidth / 2, 53, { align: "center" });
-      
-      let yPos = 65;
-      
-      // Bill Details Section
-      doc.setFontSize(10);
-      doc.setTextColor(0, 0, 0);
-      
-      // Left side - Bill From
-      doc.setFont(undefined, 'bold');
-      doc.text("Bill From:", margin, yPos);
-      doc.setFont(undefined, 'normal');
-      doc.text(COMPANY_INFO.name, margin + 25, yPos);
-      doc.text(COMPANY_INFO.address, margin + 25, yPos + 5);
-      doc.text(`GSTIN: ${COMPANY_INFO.gstin}`, margin + 25, yPos + 10);
-      doc.text(`PAN: ${COMPANY_INFO.pan}`, margin + 25, yPos + 15);
-      
-      // Right side - Bill Details
-      doc.setFont(undefined, 'bold');
-      doc.text("Bill To:", pageWidth - margin - 80, yPos);
-      doc.setFont(undefined, 'normal');
-      doc.text(vendorName, pageWidth - margin - 55, yPos);
-      if (vendorGST) {
-        doc.text(`GST: ${vendorGST}`, pageWidth - margin - 55, yPos + 5);
-      }
-      if (vendorAddress) {
-        const addressLines = doc.splitTextToSize(vendorAddress, 50);
-        doc.text(addressLines, pageWidth - margin - 55, yPos + (vendorGST ? 10 : 5));
-        yPos += (addressLines.length - 1) * 4;
-      }
-      
-      yPos = 90;
-      
-      // Invoice Details Table
-      const tableTop = yPos;
-      
-      // Table Header
-      doc.setFillColor(240, 240, 240);
-      doc.rect(margin, tableTop, contentWidth, 8, 'F');
-      doc.setFont(undefined, 'bold');
-      doc.text("Invoice Details", margin + 5, tableTop + 6);
-      
-      yPos = tableTop + 15;
-      
-      // Invoice Info
-      const dueDate = getDueDate();
-      const invoiceData = [
-        ["Invoice No:", billNumber, "Invoice Date:", invoiceDate || "-"],
-        ["Due Date:", dueDate || "-", "Reference:", (description?.substring(0, 30) + "...") || "-"]
-      ];
-      
-      invoiceData.forEach((row, i) => {
-        doc.text(row[0], margin + 5, yPos + (i * 7));
-        doc.text(row[1], margin + 35, yPos + (i * 7));
-        doc.text(row[2], pageWidth / 2 + 5, yPos + (i * 7));
-        doc.text(row[3], pageWidth / 2 + 35, yPos + (i * 7));
-      });
-      
-      yPos += 25;
-      
-      // Items Table Header
-      doc.setFillColor(50, 100, 150);
-      doc.rect(margin, yPos, contentWidth, 8, 'F');
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(255, 255, 255);
-      doc.text("Description", margin + 5, yPos + 6);
-      doc.text("Amount (₹)", pageWidth - margin - 25, yPos + 6, { align: "right" });
-      
-      yPos += 15;
-      
-      // Items Content
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(0, 0, 0);
-      
-      const items = description ? description.split('\n').filter(item => item.trim()) : ["Goods/Services"];
-      
-      items.forEach((item, index) => {
-        doc.text(item.substring(0, 60), margin + 5, yPos);
-        if (index === 0) {
-          doc.text(`₹${Number(amount || 0).toLocaleString("en-IN")}`, pageWidth - margin - 5, yPos, { align: "right" });
-        }
-        yPos += 6;
-      });
-      
-      yPos += 10;
-      
-      // Amount Calculation
-      const calculations = [
-        ["Subtotal:", `₹${Number(amount || 0).toLocaleString("en-IN")}`],
-        ["GST:", `₹${Number(gst || 0).toLocaleString("en-IN")}`],
-      ];
-      
-      calculations.forEach(([label, value], i) => {
-        doc.text(label, pageWidth - margin - 50, yPos + (i * 7));
-        doc.text(value, pageWidth - margin - 5, yPos + (i * 7), { align: "right" });
-      });
-      
-      yPos += 25;
-      
-      // Total Amount
-      doc.setDrawColor(0, 0, 0);
-      doc.setLineWidth(0.5);
-      doc.line(margin, yPos, pageWidth - margin, yPos);
-      yPos += 8;
-      
-      doc.setFont(undefined, 'bold');
-      doc.setFontSize(14);
-      doc.text("TOTAL AMOUNT", pageWidth - margin - 50, yPos);
-      doc.text(`₹${total.toLocaleString("en-IN")}`, pageWidth - margin - 5, yPos, { align: "right" });
-      
-      yPos += 15;
-      
-      // Terms & Conditions
-      doc.setFont(undefined, 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(100, 100, 100);
-      
-      const terms = [
-        "Terms & Conditions:",
-        "1. Payment due within 15 days from invoice date.",
-        "2. Late payments may attract interest charges.",
-        "3. Goods once sold will not be taken back.",
-        "4. All disputes subject to Munnar jurisdiction.",
-      ];
-      
-      terms.forEach((term, i) => {
-        doc.text(term, margin + 5, yPos + (i * 4));
-      });
-      
-      // Bank Details
-      yPos += 25;
-      doc.setFont(undefined, 'bold');
-      doc.setTextColor(0, 0, 0);
-      doc.text("Bank Details:", margin + 5, yPos);
-      doc.setFont(undefined, 'normal');
-      doc.setTextColor(100, 100, 100);
-      doc.text(`Bank: ${COMPANY_INFO.bankName}`, margin + 5, yPos + 5);
-      doc.text(`A/C No: ${COMPANY_INFO.accountNo}`, margin + 5, yPos + 10);
-      doc.text(`IFSC: ${COMPANY_INFO.ifsc}`, margin + 5, yPos + 15);
-      
-      // Footer
-      doc.setFontSize(7);
-      doc.setTextColor(150, 150, 150);
-      doc.text("This is a computer-generated invoice. No signature required.", pageWidth / 2, 280, { align: "center" });
-      doc.text(`Generated on: ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 283, { align: "center" });
-      
-      // Download
-      doc.save(`${billNumber.replace(/\//g, '_')}_${vendorName || 'Vendor'}.pdf`);
-      
-    } catch (error) {
-      console.error("PDF generation error:", error);
-      alert("Failed to generate PDF");
-    } finally {
-      setPdfLoading(false);
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4'
+    });
+    
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 15;
+    const contentWidth = pageWidth - (margin * 2);
+    
+    // Header with dark gradient background
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(0, 0, pageWidth, 45, 'F');
+    
+    // Logo and Company Name in header
+    doc.setFontSize(24);
+    doc.setTextColor(255, 255, 255);
+    doc.text("TAX INVOICE", pageWidth / 2, 18, { align: "center" });
+    doc.setFontSize(12);
+    doc.setTextColor(226, 232, 240); // slate-300
+    doc.text("Original for Recipient", pageWidth / 2, 25, { align: "center" });
+    
+    // Company header with light background
+    doc.setFillColor(248, 250, 252); // slate-50
+    doc.rect(0, 45, pageWidth, 40, 'F');
+    
+    // Company Name and Tagline
+    doc.setFontSize(20);
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text("MOUNTAIN PASS RESORT & SPA", pageWidth / 2, 60, { align: "center" });
+    
+    // Company Details
+    doc.setFontSize(10);
+    doc.setTextColor(71, 85, 105); // slate-600
+    doc.text(COMPANY_INFO.address, pageWidth / 2, 68, { align: "center" });
+    doc.text(`📞 ${COMPANY_INFO.phone} | 📧 ${COMPANY_INFO.email}`, pageWidth / 2, 74, { align: "center" });
+    
+    let yPos = 85;
+    
+    // Bill From / Bill To Section
+    doc.setFontSize(11);
+    doc.setTextColor(15, 23, 42); // slate-900
+    
+    // Bill From (Left)
+    doc.setFont(undefined, 'bold');
+    doc.text("Bill From:", margin, yPos);
+    doc.setFont(undefined, 'normal');
+    doc.text(COMPANY_INFO.name, margin + 25, yPos);
+    doc.text(COMPANY_INFO.address, margin + 25, yPos + 5);
+    doc.text(`GSTIN: ${COMPANY_INFO.gstin}`, margin + 25, yPos + 10);
+    doc.text(`PAN: ${COMPANY_INFO.pan}`, margin + 25, yPos + 15);
+    
+    // Bill To (Right)
+    doc.setFont(undefined, 'bold');
+    doc.text("Bill To:", pageWidth - margin - 80, yPos);
+    doc.setFont(undefined, 'normal');
+    
+    // Split vendor name if too long
+    const vendorNameLines = doc.splitTextToSize(vendorName, 60);
+    vendorNameLines.forEach((line, index) => {
+      doc.text(line, pageWidth - margin - 55, yPos + (index * 5));
+    });
+    yPos += (vendorNameLines.length - 1) * 5;
+    
+    if (vendorGST) {
+      doc.text(`GST: ${vendorGST}`, pageWidth - margin - 55, yPos + 5);
     }
-  };
+    if (vendorAddress) {
+      const addressLines = doc.splitTextToSize(vendorAddress, 60);
+      addressLines.forEach((line, index) => {
+        doc.text(line, pageWidth - margin - 55, yPos + (vendorGST ? 10 : 5) + (index * 5));
+      });
+      yPos += (addressLines.length - 1) * 5;
+    }
+    
+    yPos += 25;
+    
+    // Invoice Details Box with light background
+    doc.setFillColor(241, 245, 249); // slate-100
+    doc.rect(margin, yPos, contentWidth, 15, 'F');
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(15, 23, 42); // slate-900
+    doc.text("Invoice Details", margin + 5, yPos + 10);
+    
+    yPos += 20;
+    
+    // Invoice Details Table
+    const dueDate = getDueDate();
+    const invoiceData = [
+      ["Invoice No:", billNumber, "Invoice Date:", invoiceDate ? new Date(invoiceDate).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      }) : "-"],
+      ["Due Date:", dueDate ? new Date(dueDate).toLocaleDateString('en-IN', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric'
+      }) : "-", "Reference:", (description?.substring(0, 30) + (description?.length > 30 ? "..." : "")) || "-"]
+    ];
+    
+    invoiceData.forEach((row, i) => {
+      doc.setFont(undefined, 'bold');
+      doc.text(row[0], margin + 5, yPos + (i * 8));
+      doc.setFont(undefined, 'normal');
+      doc.text(row[1], margin + 30, yPos + (i * 8));
+      doc.setFont(undefined, 'bold');
+      doc.text(row[2], pageWidth / 2 + 5, yPos + (i * 8));
+      doc.setFont(undefined, 'normal');
+      doc.text(row[3], pageWidth / 2 + 30, yPos + (i * 8));
+    });
+    
+    yPos += 25;
+    
+    // Items Table Header with dark gradient
+    doc.setFillColor(15, 23, 42); // slate-900
+    doc.rect(margin, yPos, contentWidth, 10, 'F');
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(255, 255, 255);
+    doc.text("Description", margin + 5, yPos + 7);
+    doc.text("Amount (₹)", pageWidth - margin - 10, yPos + 7, { align: "right" });
+    
+    yPos += 15;
+    
+    // Items Content
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(15, 23, 42); // slate-900
+    
+    // Split description into multiple lines if needed
+    const items = description ? description.split('\n').filter(item => item.trim()) : ["Goods/Services"];
+    
+    items.forEach((item, index) => {
+      const itemLines = doc.splitTextToSize(item, contentWidth - 40);
+      itemLines.forEach((line, lineIndex) => {
+        doc.text(line, margin + 5, yPos + (lineIndex * 5));
+      });
+      if (index === 0) {
+        doc.text(`₹${Number(amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, pageWidth - margin - 5, yPos, { align: "right" });
+      }
+      yPos += (itemLines.length * 5) + 3;
+    });
+    
+    yPos += 10;
+    
+    // Amount Calculation Section
+    doc.setFontSize(12);
+    
+    // Subtotal
+    doc.text("Subtotal:", pageWidth - margin - 50, yPos);
+    doc.text(`₹${Number(amount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, pageWidth - margin - 5, yPos, { align: "right" });
+    yPos += 7;
+    
+    // GST
+    doc.text("GST:", pageWidth - margin - 50, yPos);
+    doc.text(`₹${Number(gst || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, pageWidth - margin - 5, yPos, { align: "right" });
+    yPos += 12;
+    
+    // Total Amount
+    doc.setDrawColor(100, 116, 139); // slate-500
+    doc.setLineWidth(0.3);
+    doc.line(margin, yPos, pageWidth - margin, yPos);
+    yPos += 8;
+    
+    doc.setFontSize(16);
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(5, 150, 105); // emerald-600
+    doc.text("TOTAL AMOUNT:", pageWidth - margin - 60, yPos);
+    doc.text(`₹${total.toLocaleString("en-IN", { minimumFractionDigits: 2 })}`, pageWidth - margin - 5, yPos, { align: "right" });
+    
+    yPos += 20;
+    
+    // Bank Details
+    doc.setFontSize(10);
+    doc.setFont(undefined, 'bold');
+    doc.setTextColor(71, 85, 105); // slate-600
+    doc.text("Bank Details:", margin + 5, yPos);
+    doc.setFont(undefined, 'normal');
+    doc.text(`${COMPANY_INFO.bankName} | A/C No: ${COMPANY_INFO.accountNo} | IFSC: ${COMPANY_INFO.ifsc}`, margin + 5, yPos + 5);
+    
+    yPos += 12;
+    
+    // Terms & Conditions
+    doc.setFont(undefined, 'bold');
+    doc.text("Terms:", margin + 5, yPos);
+    doc.setFont(undefined, 'normal');
+    doc.text("Payment due within 15 days. Late payments may attract interest charges.", margin + 5, yPos + 5);
+    
+    // Footer
+    doc.setFontSize(8);
+    doc.setTextColor(148, 163, 184); // slate-400
+    doc.text("This is a computer-generated invoice. No signature required.", pageWidth / 2, 285, { align: "center" });
+    doc.text(`Generated on: ${new Date().toLocaleString("en-IN")}`, pageWidth / 2, 288, { align: "center" });
+    
+    // Download
+    doc.save(`${billNumber.replace(/\//g, '_')}_${vendorName || 'Vendor'}.pdf`);
+    
+  } catch (error) {
+    console.error("PDF generation error:", error);
+    alert("Failed to generate PDF");
+  } finally {
+    setPdfLoading(false);
+  }
+};
 
   const uploadToDrive = async () => {
     if (!file) return alert("Please select a file first");
