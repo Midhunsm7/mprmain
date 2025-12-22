@@ -4,11 +4,24 @@ import { supabaseServer } from "@/lib/supabaseServer";
 
 export async function GET(req: Request) {
   try {
+    
+
+    // ✅ get logged-in user
+    const {
+      data: { user },
+    } = await supabaseServer.auth.getUser();
+
+    if (!user) {
+      return NextResponse.redirect(
+        `${new URL(req.url).origin}/login`
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const code = searchParams.get("code");
 
     if (!code) {
-      return NextResponse.json({ error: "No code found" }, { status: 400 });
+      throw new Error("No OAuth code");
     }
 
     const oauth2Client = new google.auth.OAuth2(
@@ -20,12 +33,12 @@ export async function GET(req: Request) {
     const { tokens } = await oauth2Client.getToken(code);
 
     if (!tokens.access_token) {
-      throw new Error("No access token received");
+      throw new Error("No access token");
     }
 
-    // ✅ Store token in DB (example: google_tokens table)
-
+    // ✅ store token PER USER
     await supabaseServer.from("google_tokens").upsert({
+      user_id: user.id,
       provider: "google",
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
@@ -33,13 +46,12 @@ export async function GET(req: Request) {
     });
 
     return NextResponse.redirect(
-      `${process.env.NEXT_PUBLIC_APP_URL}/accounts/vendors`
+      `${new URL(req.url).origin}/accounts/vendors`
     );
-  } catch (err: any) {
+  } catch (err) {
     console.error("Google OAuth error:", err);
-    return NextResponse.json(
-      { error: "OAuth callback failed" },
-      { status: 500 }
+    return NextResponse.redirect(
+      `${new URL(req.url).origin}/login?error=google_auth_failed`
     );
   }
 }

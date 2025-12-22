@@ -400,6 +400,14 @@ const handleExport = async () => {
               <div className="flex items-center gap-2 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-full">
                 <div className="h-2 w-2 rounded-full bg-emerald-500"></div>
                 <span>Live Dashboard</span>
+                <Button
+  onClick={() => {
+    window.location.href = "/api/google/login";
+  }}
+>
+  Connect Google Drive
+</Button>
+
               </div>
               <span className="text-slate-400">•</span>
               <span className="text-slate-600">
