@@ -21,7 +21,14 @@ import {
   DollarSign,
   Briefcase,
   FileCheck,
-  RefreshCw
+  RefreshCw,
+  Trash2,
+  Download,
+  Eye,
+  FileUp,
+  CheckCircle,
+  AlertCircle,
+  Loader2
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,23 +37,70 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from "@/components/ui/alert";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 
-// Add type definition for params
+// Add type definitions
 interface PageProps {
   params: Promise<{ id: string }>;
 }
 
+interface StaffDocument {
+  type: string;
+  name: string;
+  url: string;
+  uploaded_at: string;
+  file_name: string;
+  file_size: number;
+  mime_type: string;
+}
+
+interface StaffData {
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  address: string;
+  aadhaar: string;
+  aadhaar_url: string;
+  pan_url: string;
+  profile_picture: string;
+  department: string;
+  designation: string;
+  salary: number;
+  joined_at: string;
+  employee_id: string;
+  status: string;
+  hr_policy: string;
+  documents: StaffDocument[];
+  [key: string]: any;
+}
+
 export default function StaffDetail({ params }: PageProps) {
-  // ✅ FIXED: Unwrap the params promise using React.use()
   const unwrappedParams = React.use(params);
   const id = unwrappedParams.id;
   
-  const [staff, setStaff] = useState<any>(null);
+  const [staff, setStaff] = useState<StaffData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [activeTab, setActiveTab] = useState("personal");
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const load = async () => {
     console.log("Loading staff data for ID:", id);
@@ -55,7 +109,8 @@ export default function StaffDetail({ params }: PageProps) {
     try {
       const res = await fetch(`/api/staff/get?id=${id}&t=${Date.now()}`);
       if (!res.ok) {
-        throw new Error(`Failed to fetch: ${res.status}`);
+        const errorData = await res.json();
+        throw new Error(errorData.error || `Failed to fetch: ${res.status}`);
       }
       const data = await res.json();
       console.log("Received staff data:", data);
@@ -74,30 +129,36 @@ export default function StaffDetail({ params }: PageProps) {
     }
   }, [id]);
 
+  const showSuccess = (message: string) => {
+    setSuccessMessage(message);
+    setTimeout(() => setSuccessMessage(null), 3000);
+  };
+
   async function update(field: string, value: any) {
     setSaving(true);
     try {
       const res = await fetch("/api/staff/update", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, [field]: value }),
       });
       
+      const data = await res.json();
+      
       if (!res.ok) {
-        throw new Error("Update failed");
+        throw new Error(data.error || "Update failed");
       }
       
       // Optimistic update
       setStaff((prev: any) => ({ ...prev, [field]: value }));
       
-      // Force a re-fetch to ensure consistency with server
-      setTimeout(() => {
-        load();
-      }, 100);
-    } catch (error) {
+      showSuccess(`${field.replace("_", " ")} updated successfully`);
+      
+    } catch (error: any) {
       console.error("Update failed:", error);
-      // Revert optimistic update if failed
-      load();
+      setError(error.message);
+      // Revert by reloading
+      setTimeout(() => load(), 500);
     } finally {
       setSaving(false);
     }
@@ -107,6 +168,19 @@ export default function StaffDetail({ params }: PageProps) {
     if (!file) return;
     
     setUploading(true);
+    setUploadProgress(0);
+    
+    // Simulate upload progress
+    const progressInterval = setInterval(() => {
+      setUploadProgress(prev => {
+        if (prev >= 90) {
+          clearInterval(progressInterval);
+          return 90;
+        }
+        return prev + 10;
+      });
+    }, 200);
+
     const formData = new FormData();
     formData.append("file", file);
     formData.append("staffId", id);
@@ -118,17 +192,106 @@ export default function StaffDetail({ params }: PageProps) {
         body: formData,
       });
       
+      clearInterval(progressInterval);
+      setUploadProgress(100);
+      
       const data = await res.json();
-      if (data.success) {
-        // Optimistic update
-        setStaff((prev: any) => ({ ...prev, [field]: data.url }));
-        await update(field, data.url);
+      
+      if (!res.ok) {
+        throw new Error(data.error || "Upload failed");
       }
-    } catch (error) {
+      
+      // Update staff data
+      setStaff((prev: any) => {
+        if (!prev) return prev;
+        
+        const updatedStaff = { ...prev, [field]: data.url };
+        
+        // Update documents array if needed
+        if (field.includes("_url")) {
+          const documentName = field.replace("_url", "").replace("_", " ").toUpperCase();
+          const existingDocuments = prev.documents || [];
+          
+          // Remove existing document of same type
+          const filteredDocuments = existingDocuments.filter(
+            (doc: StaffDocument) => doc.type !== field
+          );
+          
+          // Add new document
+          const newDocument: StaffDocument = {
+            type: field,
+            name: documentName,
+            url: data.url,
+            uploaded_at: new Date().toISOString(),
+            file_name: file.name,
+            file_size: file.size,
+            mime_type: file.type,
+          };
+          
+          updatedStaff.documents = [...filteredDocuments, newDocument];
+        }
+        
+        return updatedStaff;
+      });
+      
+      showSuccess(`${field.replace("_", " ")} uploaded successfully`);
+      
+      // Reset progress after success
+      setTimeout(() => {
+        setUploadProgress(0);
+        setUploading(false);
+      }, 500);
+      
+    } catch (error: any) {
       console.error("Upload failed:", error);
-      load(); // Revert on error
-    } finally {
+      setError(error.message);
+      clearInterval(progressInterval);
+      setUploadProgress(0);
       setUploading(false);
+    }
+  };
+
+  const handleDeleteDocument = async (field: string) => {
+    if (!confirm("Are you sure you want to delete this document?")) return;
+    
+    try {
+      const res = await fetch("/api/staff/upload", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          staffId: id,
+          field: field,
+          url: staff?.[field],
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || "Delete failed");
+      }
+      
+      // Update staff data
+      setStaff((prev: any) => {
+        if (!prev) return prev;
+        
+        const updatedStaff = { ...prev, [field]: null };
+        
+        // Remove from documents array
+        if (prev.documents) {
+          updatedStaff.documents = prev.documents.filter(
+            (doc: StaffDocument) => doc.type !== field
+          );
+        }
+        
+        return updatedStaff;
+      });
+      
+      showSuccess("Document deleted successfully");
+      
+    } catch (error: any) {
+      console.error("Delete failed:", error);
+      setError(error.message);
     }
   };
 
@@ -155,18 +318,43 @@ export default function StaffDetail({ params }: PageProps) {
     }
   };
 
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Render loading state
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
+        <div className="text-center space-y-4">
+          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="text-slate-600">Loading staff details...</p>
+          <p className="text-sm text-slate-400">ID: {id}</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Render error state
   if (error) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardHeader>
             <CardTitle className="text-red-600 flex items-center gap-2">
-              <Shield className="w-5 h-5" />
+              <AlertCircle className="w-5 h-5" />
               Error Loading Staff
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <p className="text-red-500">{error}</p>
+            <Alert variant="destructive">
+              <AlertTitle>Error</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
             <div className="flex gap-3">
               <Button onClick={load} className="flex-1">
                 <RefreshCw className="w-4 h-4 mr-2" />
@@ -186,18 +374,7 @@ export default function StaffDetail({ params }: PageProps) {
     );
   }
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="w-16 h-16 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-          <p className="text-slate-600">Loading staff details...</p>
-          <p className="text-sm text-slate-400">ID: {id}</p>
-        </div>
-      </div>
-    );
-  }
-
+  // Render not found state
   if (!staff) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white flex items-center justify-center">
@@ -216,6 +393,17 @@ export default function StaffDetail({ params }: PageProps) {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 to-white p-4 lg:p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Success Alert */}
+        {successMessage && (
+          <div className="fixed top-4 right-4 z-50 animate-in slide-in-from-right">
+            <Alert className="bg-green-50 border-green-200">
+              <CheckCircle className="h-4 w-4 text-green-600" />
+              <AlertTitle>Success!</AlertTitle>
+              <AlertDescription>{successMessage}</AlertDescription>
+            </Alert>
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
@@ -224,16 +412,6 @@ export default function StaffDetail({ params }: PageProps) {
               <p className="text-slate-600 mt-2">Employee profile and details management</p>
             </div>
             <div className="flex gap-3">
-              <Button
-                onClick={() => {
-                  setStaff(null);
-                  load();
-                }}
-                variant="outline"
-                className="border-red-200 text-red-600 hover:text-red-700 hover:bg-red-50"
-              >
-                Force Refresh
-              </Button>
               <Button
                 onClick={load}
                 variant="outline"
@@ -247,9 +425,10 @@ export default function StaffDetail({ params }: PageProps) {
           </div>
         </div>
 
+        {/* Saving Indicator */}
         {saving && (
           <div className="fixed top-4 right-4 bg-blue-500 text-white px-4 py-2 rounded-lg shadow-lg flex items-center gap-2 z-50 animate-pulse">
-            <RefreshCw className="w-4 h-4 animate-spin" />
+            <Loader2 className="w-4 h-4 animate-spin" />
             Saving changes...
           </div>
         )}
@@ -260,7 +439,7 @@ export default function StaffDetail({ params }: PageProps) {
             <Card className="border-slate-200 shadow-lg">
               <CardContent className="p-6">
                 <div className="flex flex-col items-center text-center space-y-4">
-                  {/* Profile Picture */}
+                  {/* Profile Picture Upload */}
                   <div className="relative">
                     <Avatar className="w-32 h-32 border-4 border-white shadow-lg">
                       <AvatarImage src={staff.profile_picture} />
@@ -268,17 +447,32 @@ export default function StaffDetail({ params }: PageProps) {
                         {getInitials(staff.name || "NA")}
                       </AvatarFallback>
                     </Avatar>
-                    <label className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full cursor-pointer hover:bg-blue-700 transition-colors">
+                    <label className="absolute bottom-0 right-0 bg-blue-600 text-white p-2 rounded-full cursor-pointer hover:bg-blue-700 transition-colors shadow-lg">
                       <Camera className="w-4 h-4" />
                       <input
                         type="file"
                         className="hidden"
                         accept="image/*"
-                        onChange={(e) => e.target.files?.[0] && handleFileUpload("profile_picture", e.target.files[0])}
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (file) {
+                            handleFileUpload("profile_picture", file);
+                          }
+                        }}
                         disabled={uploading}
                       />
                     </label>
                   </div>
+
+                  {/* Upload Progress */}
+                  {uploading && staff.profile_picture && (
+                    <div className="w-full">
+                      <Progress value={uploadProgress} className="h-2" />
+                      <p className="text-xs text-slate-500 mt-1">
+                        Uploading... {uploadProgress}%
+                      </p>
+                    </div>
+                  )}
 
                   {/* Staff Info */}
                   <div>
@@ -314,6 +508,20 @@ export default function StaffDetail({ params }: PageProps) {
                         {formatDate(staff.joined_at)}
                       </div>
                     </div>
+                  </div>
+
+                  {/* Document Completion */}
+                  <div className="w-full">
+                    <div className="flex justify-between text-sm text-slate-600 mb-1">
+                      <span>Document Completion</span>
+                      <span>
+                        {(staff.documents?.length || 0)}/5
+                      </span>
+                    </div>
+                    <Progress 
+                      value={((staff.documents?.length || 0) / 5) * 100} 
+                      className="h-2"
+                    />
                   </div>
                 </div>
               </CardContent>
@@ -352,7 +560,6 @@ export default function StaffDetail({ params }: PageProps) {
               </CardHeader>
               
               <CardContent>
-                {/* ✅ FIXED: Tabs moved inside CardContent, all TabsContent as direct children */}
                 <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                   <TabsList className="grid grid-cols-4 mb-6">
                     <TabsTrigger value="personal" className="flex items-center gap-2">
@@ -373,6 +580,7 @@ export default function StaffDetail({ params }: PageProps) {
                     </TabsTrigger>
                   </TabsList>
 
+                  {/* Personal Information Tab */}
                   <TabsContent value="personal" className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <EditableField
@@ -419,12 +627,31 @@ export default function StaffDetail({ params }: PageProps) {
                     />
                   </TabsContent>
 
+                  {/* Documents Tab */}
                   <TabsContent value="documents" className="space-y-6">
+                    <Alert className="bg-blue-50 border-blue-200">
+                      <FileUp className="h-4 w-4 text-blue-600" />
+                      <AlertTitle>Upload Documents</AlertTitle>
+                      <AlertDescription>
+                        Upload all required documents. Files will be stored securely on Google Drive.
+                      </AlertDescription>
+                    </Alert>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <FileUploadField
+                        label="Profile Picture"
+                        value={staff.profile_picture}
+                        onUpload={(file: File) => handleFileUpload("profile_picture", file)}
+                        onDelete={() => handleDeleteDocument("profile_picture")}
+                        accept="image/*"
+                        uploading={uploading}
+                        preview={staff.profile_picture}
+                      />
                       <FileUploadField
                         label="Aadhaar Card"
                         value={staff.aadhaar_url}
                         onUpload={(file: File) => handleFileUpload("aadhaar_url", file)}
+                        onDelete={() => handleDeleteDocument("aadhaar_url")}
                         accept=".pdf,.jpg,.jpeg,.png"
                         uploading={uploading}
                       />
@@ -432,38 +659,91 @@ export default function StaffDetail({ params }: PageProps) {
                         label="PAN Card"
                         value={staff.pan_url}
                         onUpload={(file: File) => handleFileUpload("pan_url", file)}
+                        onDelete={() => handleDeleteDocument("pan_url")}
                         accept=".pdf,.jpg,.jpeg,.png"
+                        uploading={uploading}
+                      />
+                      <FileUploadField
+                        label="Resume/CV"
+                        value={staff.resume_url}
+                        onUpload={(file: File) => handleFileUpload("resume_url", file)}
+                        onDelete={() => handleDeleteDocument("resume_url")}
+                        accept=".pdf,.doc,.docx"
                         uploading={uploading}
                       />
                     </div>
                     
-                    <div className="mt-6">
-                      <h3 className="text-lg font-semibold text-slate-900 mb-4">Other Documents</h3>
-                      <div className="space-y-4">
-                        {staff.documents && staff.documents.length > 0 ? (
-                          staff.documents.map((doc: any, index: number) => (
-                            <div key={index} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
-                              <div>
-                                <div className="font-medium text-slate-900">{doc.name}</div>
-                                <div className="text-sm text-slate-500">{doc.type}</div>
+                    {/* Additional Documents Section */}
+                    <div className="mt-8">
+                      <h3 className="text-lg font-semibold text-slate-900 mb-4 flex items-center gap-2">
+                        <FileText className="w-5 h-5" />
+                        All Uploaded Documents
+                      </h3>
+                      
+                      {staff.documents && staff.documents.length > 0 ? (
+                        <div className="space-y-3">
+                          {staff.documents.map((doc: StaffDocument, index: number) => (
+                            <div 
+                              key={index} 
+                              className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200 hover:border-slate-300 transition-colors"
+                            >
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 bg-white rounded border">
+                                  <FileText className="w-5 h-5 text-blue-600" />
+                                </div>
+                                <div>
+                                  <div className="font-medium text-slate-900">{doc.name}</div>
+                                  <div className="text-xs text-slate-500 flex items-center gap-2">
+                                    <span>{formatFileSize(doc.file_size)}</span>
+                                    <span>•</span>
+                                    <span>{doc.mime_type}</span>
+                                    <span>•</span>
+                                    <span>{formatDate(doc.uploaded_at)}</span>
+                                  </div>
+                                </div>
                               </div>
-                              <a
-                                href={doc.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-800"
-                              >
-                                <FileCheck className="w-5 h-5" />
-                              </a>
+                              <div className="flex gap-2">
+                                <a
+                                  href={doc.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="p-2 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded"
+                                  title="View Document"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </a>
+                                <a
+                                  href={doc.url}
+                                  download
+                                  className="p-2 text-green-600 hover:text-green-800 hover:bg-green-50 rounded"
+                                  title="Download Document"
+                                >
+                                  <Download className="w-4 h-4" />
+                                </a>
+                                <button
+                                  onClick={() => handleDeleteDocument(doc.type)}
+                                  className="p-2 text-red-600 hover:text-red-800 hover:bg-red-50 rounded"
+                                  title="Delete Document"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              </div>
                             </div>
-                          ))
-                        ) : (
-                          <p className="text-slate-500 text-center py-8">No additional documents uploaded</p>
-                        )}
-                      </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-center py-12 border-2 border-dashed border-slate-300 rounded-lg">
+                          <FileText className="w-12 h-12 text-slate-300 mx-auto mb-4" />
+                          <p className="text-slate-500">No documents uploaded yet</p>
+                          <p className="text-sm text-slate-400 mt-1">
+                            Upload documents using the fields above
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </TabsContent>
 
+                  {/* Employment Tab */}
                   <TabsContent value="employment" className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <EditableField
@@ -523,11 +803,13 @@ export default function StaffDetail({ params }: PageProps) {
                           <option value="inactive">Inactive</option>
                           <option value="probation">Probation</option>
                           <option value="notice_period">Notice Period</option>
+                          <option value="terminated">Terminated</option>
                         </select>
                       </div>
                     </div>
                   </TabsContent>
 
+                  {/* HR Tab */}
                   <TabsContent value="hr" className="space-y-6">
                     <EditableTextarea
                       label="HR Policy Agreement"
@@ -557,6 +839,7 @@ export default function StaffDetail({ params }: PageProps) {
   );
 }
 
+// Component for editable fields
 function EditableField({ 
   label, 
   value, 
@@ -662,6 +945,7 @@ function EditableField({
   );
 }
 
+// Component for editable textareas
 function EditableTextarea({ 
   label, 
   value, 
@@ -750,7 +1034,16 @@ function EditableTextarea({
   );
 }
 
-function FileUploadField({ label, value, onUpload, accept, uploading }: any) {
+// Enhanced File Upload Component
+function FileUploadField({ 
+  label, 
+  value, 
+  preview,
+  onUpload, 
+  onDelete,
+  accept, 
+  uploading = false 
+}: any) {
   const [fileName, setFileName] = useState("");
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -761,33 +1054,78 @@ function FileUploadField({ label, value, onUpload, accept, uploading }: any) {
     }
   };
 
+  const isImage = accept.includes("image");
+
   return (
     <div className="space-y-2">
       <label className="text-sm font-medium text-slate-700">{label}</label>
-      <div className={`border-2 ${value ? 'border-green-200' : 'border-slate-300'} border-dashed rounded-lg p-6 text-center transition-all duration-300 hover:border-blue-400`}>
+      <div className={`border-2 ${value ? 'border-green-200' : 'border-slate-300'} border-dashed rounded-lg p-4 transition-all duration-300 hover:border-blue-400`}>
         {value ? (
           <div className="space-y-3">
-            <div className="flex items-center justify-center gap-2">
-              <FileCheck className="w-8 h-8 text-green-600" />
-              <div className="text-left">
-                <div className="font-medium text-slate-900">Document Uploaded</div>
-                <a
-                  href={value}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
-                >
-                  View Document
-                </a>
+            {isImage && preview ? (
+              <div className="flex items-center gap-3">
+                <div className="w-16 h-16 rounded overflow-hidden border">
+                  <img 
+                    src={preview} 
+                    alt={label}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                <div className="flex-1">
+                  <div className="font-medium text-slate-900">Uploaded</div>
+                  <div className="flex gap-2 mt-2">
+                    <a
+                      href={value}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      <Eye className="w-3 h-3" />
+                      View
+                    </a>
+                    <button
+                      onClick={onDelete}
+                      className="text-sm text-red-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Delete
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileCheck className="w-6 h-6 text-green-600" />
+                  <div className="text-left">
+                    <div className="font-medium text-slate-900">Document Uploaded</div>
+                    <a
+                      href={value}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-blue-600 hover:underline inline-flex items-center gap-1"
+                    >
+                      <Eye className="w-3 h-3" />
+                      View Document
+                    </a>
+                  </div>
+                </div>
+                <button
+                  onClick={onDelete}
+                  className="p-2 text-red-600 hover:bg-red-50 rounded-lg"
+                  title="Delete Document"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="space-y-3">
-            <Upload className="w-8 h-8 text-slate-400 mx-auto" />
+          <div className="text-center py-4">
+            <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
             <div>
-              <p className="text-sm text-slate-600 mb-2">No file uploaded</p>
-              <p className="text-xs text-slate-500">Upload {label.toLowerCase()}</p>
+              <p className="text-sm text-slate-600 mb-1">No file uploaded</p>
+              <p className="text-xs text-slate-500">Click to upload {label.toLowerCase()}</p>
             </div>
           </div>
         )}
@@ -796,7 +1134,7 @@ function FileUploadField({ label, value, onUpload, accept, uploading }: any) {
           <label className={`inline-flex items-center gap-2 px-4 py-2 ${uploading ? 'bg-slate-100 cursor-not-allowed' : 'bg-slate-100 hover:bg-slate-200'} text-slate-700 rounded-lg cursor-pointer transition-colors`}>
             {uploading ? (
               <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
+                <Loader2 className="w-4 h-4 animate-spin" />
                 Uploading...
               </>
             ) : (
