@@ -101,7 +101,7 @@ interface DeleteDialog {
   item: InventoryItem | null;
 }
 
-const DEFAULT_THRESHOLD = 10;
+const DEFAULT_THRESHOLD = 0;
 
 // Predefined units with categories
 const UNIT_OPTIONS = [
@@ -234,43 +234,50 @@ export default function InventoryPage() {
     (item) => item.stock <= (item.threshold || DEFAULT_THRESHOLD)
   );
 
-  const handleCreateItem = async () => {
-    if (!newItem.name.trim()) {
-      toast.error("Please enter item name");
-      return;
-    }
+const handleCreateItem = async () => {
+  if (!newItem.name.trim()) {
+    toast.error("Please enter item name");
+    return;
+  }
 
-    try {
-      const { error } = await supabase.from("inventory_items").insert([
-        {
-          name: newItem.name.trim(),
-          category: newItem.category,
-          unit: newItem.unit,
-          stock: newItem.stock || 0,
-          threshold: newItem.threshold || DEFAULT_THRESHOLD,
-          last_restocked: new Date().toISOString().split("T")[0],
-          source: newItem.source,
-          source_type: null,
-          source_details: null,
-        },
-      ]);
+  try {
+    // Parse the threshold - if it's undefined or null, use DEFAULT_THRESHOLD
+    // But if it's 0, keep it as 0
+    const thresholdValue = 
+      newItem.threshold === undefined || newItem.threshold === null 
+        ? DEFAULT_THRESHOLD 
+        : newItem.threshold;
 
-      if (error) throw error;
+    const { error } = await supabase.from("inventory_items").insert([
+      {
+        name: newItem.name.trim(),
+        category: newItem.category,
+        unit: newItem.unit,
+        stock: newItem.stock || 0,
+        threshold: thresholdValue, // Fixed - properly handles 0
+        last_restocked: new Date().toISOString().split("T")[0],
+        source: newItem.source,
+        source_type: null,
+        source_details: null,
+      },
+    ]);
 
-      toast.success("Item added successfully!");
-      setIsAddDialogOpen(false);
-      setNewItem({
-        name: "",
-        category: "Food",
-        unit: "pcs",
-        stock: 0,
-        threshold: DEFAULT_THRESHOLD,
-        source: "purchase",
-      });
-    } catch (error: any) {
-      toast.error(error.message || "Failed to add item");
-    }
-  };
+    if (error) throw error;
+
+    toast.success("Item added successfully!");
+    setIsAddDialogOpen(false);
+    setNewItem({
+      name: "",
+      category: "Food",
+      unit: "pcs",
+      stock: 0,
+      threshold: DEFAULT_THRESHOLD,
+      source: "purchase",
+    });
+  } catch (error: any) {
+    toast.error(error.message || "Failed to add item");
+  }
+};
 
   const handleUpdateStock = async (
     itemId: string,
@@ -474,7 +481,7 @@ export default function InventoryPage() {
               </div>
               <div>
                 <h1 className="text-3xl md:text-4xl font-bold text-gray-900">
-                  Inventory Management
+                  STORE Management
                 </h1>
                 <p className="text-gray-600">
                   Track and manage resort inventory
@@ -1066,37 +1073,50 @@ export default function InventoryPage() {
                 <Input
                   type="number"
                   step="0.01"
-                  value={newItem.stock}
-                  onChange={(e) =>
-                    setNewItem({
-                      ...newItem,
-                      stock: parseFloat(e.target.value) || 0,
-                    })
-                  }
+                  value={newItem.stock === 0 ? "" : newItem.stock}
+                  onChange={(e) => {
+                    const value = e.target.value;
+                    // Allow empty string, otherwise parse as float
+                    if (value === "") {
+                      setNewItem({ ...newItem, stock: 0 });
+                    } else {
+                      const numValue = parseFloat(value);
+                      // Only update if it's a valid number and non-negative
+                      if (!isNaN(numValue) && numValue >= 0) {
+                        setNewItem({ ...newItem, stock: numValue });
+                      }
+                    }
+                  }}
                   placeholder="0"
                   min="0"
                   className="border-2"
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label className="text-gray-700">Low Stock Threshold</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={newItem.threshold}
-                  onChange={(e) =>
-                    setNewItem({
-                      ...newItem,
-                      threshold:
-                        parseFloat(e.target.value) || DEFAULT_THRESHOLD,
-                    })
-                  }
-                  placeholder={DEFAULT_THRESHOLD.toString()}
-                  min="0"
-                  className="border-2"
-                />
-              </div>
+<div className="space-y-2">
+  <Label className="text-gray-700">Low Stock Threshold</Label>
+  <Input
+    type="number"
+    step="0.01"
+    value={newItem.threshold === DEFAULT_THRESHOLD ? "" : newItem.threshold.toString()}
+    onChange={(e) => {
+      const value = e.target.value;
+      // Allow empty string, otherwise parse as float
+      if (value === "") {
+        setNewItem({ ...newItem, threshold: DEFAULT_THRESHOLD });
+      } else {
+        const numValue = parseFloat(value);
+        // Only update if it's a valid number (0 is valid)
+        if (!isNaN(numValue) && numValue >= 0) {
+          setNewItem({ ...newItem, threshold: numValue });
+        }
+      }
+    }}
+    placeholder={DEFAULT_THRESHOLD.toString()}
+    min="0"
+    className="border-2"
+  />
+</div>
             </div>
 
             <div className="space-y-2">
