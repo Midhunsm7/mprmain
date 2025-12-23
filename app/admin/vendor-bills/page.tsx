@@ -33,9 +33,13 @@ import {
   Download,
   Edit,
   Save,
-  X,
-  Check,
   FileSpreadsheet,
+  Banknote,
+  Building2,
+  MapPin,
+  QrCode,
+  Filter,
+  RefreshCw,
 } from "lucide-react";
 import {
   Select,
@@ -60,14 +64,12 @@ type Vendor = {
   email?: string;
   gst_number?: string;
   address?: string;
-  payment_details?: {
-    bank_name?: string;
-    account_number?: string;
-    ifsc_code?: string;
-    upi_id?: string;
-    payment_terms?: string;
-  };
+  account_number?: string;
+  ifsc_code?: string;
+  upi_id?: string;
+  outstanding_amount?: number;
   created_at: string;
+  // Note: payment_details column doesn't exist in your schema
 };
 
 type VendorBill = {
@@ -78,15 +80,21 @@ type VendorBill = {
   status: "unpaid" | "partially_paid" | "paid";
   paid: number;
   balance: number;
+  vendor_id?: string;
   vendors?: Vendor;
 };
 
 type ExcelRow = {
   id: string;
   vendor_name: string;
+  vendor_phone: string;
+  vendor_email: string;
   vendor_gstin: string;
   vendor_address: string;
-  bank_details: string;
+  bank_name: string; // We'll keep this as a separate field for manual entry
+  account_number: string;
+  ifsc_code: string;
+  upi_id: string;
   total_outstanding: number;
   payment_amount: number;
   payment_type: "full" | "partial";
@@ -97,6 +105,10 @@ export default function VendorBillsPage() {
   const router = useRouter();
   const [bills, setBills] = useState<VendorBill[]>([]);
   const [loading, setLoading] = useState(true);
+  
+  /* ---------- Filter States ---------- */
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [searchTerm, setSearchTerm] = useState<string>("");
 
   /* ---------- Vendor Management ---------- */
   const [vendors, setVendors] = useState<Vendor[]>([]);
@@ -105,11 +117,11 @@ export default function VendorBillsPage() {
   const [editForm, setEditForm] = useState({
     gst_number: "",
     address: "",
-    bank_name: "",
+    bank_name: "", // For manual entry in Excel
     account_number: "",
     ifsc_code: "",
     upi_id: "",
-    payment_terms: "",
+    payment_terms: "", // We'll store this in a notes field
   });
 
   /* ---------- Excel Export ---------- */
@@ -143,97 +155,258 @@ export default function VendorBillsPage() {
 
   async function loadBills() {
     setLoading(true);
+    
+    try {
+      console.log("Loading bills from vendor_bills table...");
+      
+      // Simple query without complex joins
+      const { data: billsData, error: billsError } = await supabase
+        .from("vendor_bills")
+        .select(`
+          id,
+          vendor_id,
+          bill_date,
+          due_date,
+          total,
+          status,
+          description,
+          notes,
+          created_at
+        `)
+        .order("bill_date", { ascending: false });
 
-    const { data } = await supabase
-      .from("vendor_bills")
-      .select(
-        `
-        id,
-        bill_date,
-        due_date,
-        total,
-        status,
-        vendors ( id, name )
-      `
-      )
-      .order("bill_date", { ascending: false });
+      if (billsError) {
+        console.error("Error loading bills:", billsError);
+        toast.error(`Failed to load bills: ${billsError.message}`);
+        setBills([]);
+        setLoading(false);
+        return;
+      }
 
-    if (!data) {
-      setBills([]);
-      setLoading(false);
-      return;
-    }
+      console.log(`Found ${billsData?.length || 0} bills`);
 
-    const enriched = await Promise.all(
-      data.map(async (b: any) => {
-        const { data: payments } = await supabase
+      if (!billsData || billsData.length === 0) {
+        setBills([]);
+        setLoading(false);
+        return;
+      }
+
+      // Get vendor details for each bill
+      const vendorIds = billsData.map(bill => bill.vendor_id).filter(Boolean);
+      const vendorMap = new Map<string, Vendor>();
+      
+      if (vendorIds.length > 0) {
+        // Query vendors table with correct columns from your schema
+        const { data: vendorsData, error: vendorsError } = await supabase
+          .from("vendors")
+          .select(`
+            id,
+            name,
+            phone,
+            email,
+            gst_number,
+            address,
+            account_number,
+            ifsc_code,
+            upi_id,
+            outstanding_amount,
+            created_at
+          `)
+          .in("id", vendorIds);
+        
+        if (vendorsError) {
+          console.error("Error loading vendors:", vendorsError);
+        } else if (vendorsData) {
+          vendorsData.forEach(vendor => {
+            vendorMap.set(vendor.id, vendor);
+          });
+          console.log(`Loaded ${vendorsData.length} vendors`);
+        }
+      }
+
+      // Load payments for each bill
+      const billIds = billsData.map(bill => bill.id);
+      const paymentMap = new Map<string, number>();
+      
+      if (billIds.length > 0) {
+        const { data: paymentsData, error: paymentsError } = await supabase
           .from("vendor_bill_payments")
-          .select("amount")
-          .eq("vendor_bill_id", b.id);
+          .select("vendor_bill_id, amount")
+          .in("vendor_bill_id", billIds);
+        
+        if (paymentsError) {
+          console.error("Error loading payments:", paymentsError);
+        } else if (paymentsData) {
+          paymentsData.forEach(payment => {
+            const current = paymentMap.get(payment.vendor_bill_id) || 0;
+            paymentMap.set(payment.vendor_bill_id, current + Number(payment.amount || 0));
+          });
+        }
+      }
 
-        const paid =
-          payments?.reduce((s, p) => s + Number(p.amount), 0) || 0;
+      // Process bills with vendor and payment data
+      const enrichedBills: VendorBill[] = billsData.map(bill => {
+        const paid = paymentMap.get(bill.id) || 0;
+        const balance = Number(bill.total || 0) - paid;
+        const vendor = vendorMap.get(bill.vendor_id || "");
+        
+        // Determine status based on payments
+        let status: "unpaid" | "partially_paid" | "paid" = "unpaid";
+        
+        if (bill.status === "paid" || paid >= Number(bill.total || 0)) {
+          status = "paid";
+        } else if (bill.status === "partially_paid" || (paid > 0 && paid < Number(bill.total || 0))) {
+          status = "partially_paid";
+        }
 
         return {
-          ...b,
+          id: bill.id,
+          bill_date: bill.bill_date || new Date().toISOString().split('T')[0],
+          due_date: bill.due_date,
+          total: Number(bill.total || 0),
+          status,
           paid,
-          balance: b.total - paid,
+          balance,
+          vendor_id: bill.vendor_id,
+          vendors: vendor || undefined,
         };
-      })
-    );
+      });
 
-    setBills(enriched);
-    setLoading(false);
+      console.log(`Successfully processed ${enrichedBills.length} bills`);
+      setBills(enrichedBills);
+      
+    } catch (error: any) {
+      console.error("Unexpected error in loadBills:", error);
+      toast.error("Failed to load vendor bills");
+      setBills([]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function loadVendors() {
-    const { data } = await supabase
-      .from("vendors")
-      .select("*")
-      .order("name");
+    try {
+      console.log("Loading vendors from database...");
+      
+      // Query with correct columns from your schema
+      const { data, error } = await supabase
+        .from("vendors")
+        .select(`
+          id,
+          name,
+          phone,
+          email,
+          gst_number,
+          address,
+          account_number,
+          ifsc_code,
+          upi_id,
+          outstanding_amount,
+          created_at
+        `)
+        .order("name");
 
-    if (data) {
-      setVendors(data);
+      if (error) {
+        console.error("Error loading vendors:", error);
+        toast.error(`Failed to load vendors: ${error.message}`);
+        return;
+      }
+
+      console.log(`Loaded ${data?.length || 0} vendors`);
+      
+      if (data) {
+        setVendors(data);
+      }
+    } catch (error: any) {
+      console.error("Unexpected error in loadVendors:", error);
+      toast.error("Failed to load vendors");
     }
   }
+
+  /* ================= FILTERED BILLS ================= */
+  
+  const filteredBills = bills.filter(bill => {
+    // Filter by status
+    if (statusFilter !== "all" && bill.status !== statusFilter) {
+      return false;
+    }
+    
+    // Filter by search term
+    if (searchTerm) {
+      const term = searchTerm.toLowerCase();
+      const vendorName = bill.vendors?.name?.toLowerCase() || "";
+      const vendorGST = bill.vendors?.gst_number?.toLowerCase() || "";
+      const billId = bill.id.toLowerCase();
+      
+      return vendorName.includes(term) || 
+             vendorGST.includes(term) || 
+             billId.includes(term);
+    }
+    
+    return true;
+  });
+
+  /* ================= STATS CALCULATION ================= */
+  
+  const stats = {
+    totalBills: bills.length,
+    pendingAmount: bills.reduce((sum, bill) => sum + bill.balance, 0),
+    totalPaid: bills.reduce((sum, bill) => sum + bill.paid, 0),
+    overdueBills: bills.filter(b => 
+      b.due_date && 
+      new Date(b.due_date) < new Date() && 
+      b.balance > 0
+    ).length,
+    unpaidBills: bills.filter(b => b.status === 'unpaid').length,
+    partiallyPaidBills: bills.filter(b => b.status === 'partially_paid').length,
+    paidBills: bills.filter(b => b.status === 'paid').length,
+    vendorsWithUPI: vendors.filter(v => v.upi_id).length,
+    vendorsWithBank: vendors.filter(v => v.account_number).length,
+  };
 
   /* ================= VENDOR MANAGEMENT ================= */
 
   async function saveVendorDetails() {
     if (!editVendor) return;
 
-    const { error } = await supabase
-      .from("vendors")
-      .update({
-        gst_number: editForm.gst_number || null,
-        address: editForm.address || null,
-        payment_details: {
-          bank_name: editForm.bank_name || null,
+    try {
+      // Update vendor with correct columns from your schema
+      const { error } = await supabase
+        .from("vendors")
+        .update({
+          gst_number: editForm.gst_number || null,
+          address: editForm.address || null,
           account_number: editForm.account_number || null,
           ifsc_code: editForm.ifsc_code || null,
           upi_id: editForm.upi_id || null,
-          payment_terms: editForm.payment_terms || null,
-        },
-      })
-      .eq("id", editVendor.id);
+        })
+        .eq("id", editVendor.id);
 
-    if (error) {
+      if (error) {
+        console.error("Error saving vendor details:", error);
+        toast.error("Failed to save vendor details");
+        return;
+      }
+
+      toast.success("Vendor details saved successfully");
+      setEditVendor(null);
+      setEditForm({
+        gst_number: "",
+        address: "",
+        bank_name: "",
+        account_number: "",
+        ifsc_code: "",
+        upi_id: "",
+        payment_terms: "",
+      });
+      
+      // Refresh data
+      await Promise.all([loadVendors(), loadBills()]);
+      
+    } catch (error) {
+      console.error("Error in saveVendorDetails:", error);
       toast.error("Failed to save vendor details");
-      return;
     }
-
-    toast.success("Vendor details saved successfully");
-    setEditVendor(null);
-    setEditForm({
-      gst_number: "",
-      address: "",
-      bank_name: "",
-      account_number: "",
-      ifsc_code: "",
-      upi_id: "",
-      payment_terms: "",
-    });
-    loadVendors();
   }
 
   /* ================= EXCEL EXPORT ================= */
@@ -252,19 +425,25 @@ export default function VendorBillsPage() {
       const vendorBills = bills.filter(b => b.vendors?.id === vendorId);
       const totalOutstanding = vendorBills.reduce((sum, bill) => sum + bill.balance, 0);
 
-      return {
+      // Create Excel row with vendor details
+      const vendorDetails: ExcelRow = {
         id: vendor.id,
         vendor_name: vendor.name,
+        vendor_phone: vendor.phone || "",
+        vendor_email: vendor.email || "",
         vendor_gstin: vendor.gst_number || "",
         vendor_address: vendor.address || "",
-        bank_details: vendor.payment_details 
-          ? `${vendor.payment_details.bank_name || ''} A/C: ${vendor.payment_details.account_number || ''}`
-          : "",
+        bank_name: "", // Will be manually filled in Excel
+        account_number: vendor.account_number || "",
+        ifsc_code: vendor.ifsc_code || "",
+        upi_id: vendor.upi_id || "",
         total_outstanding: totalOutstanding,
-        payment_amount: 0, // User will fill this
-        payment_type: "partial" as const,
+        payment_amount: 0,
+        payment_type: "partial",
         notes: "",
       };
+
+      return vendorDetails;
     }).filter(Boolean) as ExcelRow[];
 
     setExcelRows(rows);
@@ -286,68 +465,95 @@ export default function VendorBillsPage() {
   }
 
   async function exportToExcel() {
-    // Calculate total payment
-    const totalPayment = excelRows.reduce((sum, row) => sum + row.payment_amount, 0);
-    
-    if (totalPayment === 0) {
-      toast.error("Please enter payment amounts");
-      return;
-    }
-
-    // Create Excel data
-    const excelData = excelRows.map(row => ({
-      "Vendor Name": row.vendor_name,
-      "GSTIN": row.vendor_gstin,
-      "Address": row.vendor_address,
-      "Bank Details": row.bank_details,
-      "Total Outstanding": row.total_outstanding,
-      "Payment Amount": row.payment_amount,
-      "Payment Type": row.payment_type,
-      "Notes": row.notes || "",
-    }));
-
-    // Create workbook
-    const XLSX = await import("xlsx");
-    const worksheet = XLSX.utils.json_to_sheet(excelData);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Vendor Payments");
-    
-    // Add summary
-    const summary = [
-      ["Summary"],
-      ["Total Vendors:", excelRows.length],
-      ["Total Outstanding:", excelRows.reduce((s, r) => s + r.total_outstanding, 0)],
-      ["Total Payment:", totalPayment],
-      ["Generated Date:", new Date().toLocaleDateString()],
-    ];
-    const summarySheet = XLSX.utils.aoa_to_sheet(summary);
-    XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
-
-    // Generate and download
-    XLSX.writeFile(workbook, `vendor-payments-${new Date().toISOString().split('T')[0]}.xlsx`);
-    
-    toast.success("Excel file downloaded successfully");
-    setExcelOpen(false);
-    
-    // Create payments for each row
-    await createPaymentsFromExcel();
-  }
-
-  async function createPaymentsFromExcel() {
-    for (const row of excelRows) {
-      if (row.payment_amount > 0) {
-        // Get vendor's unpaid bills
-        const vendorBills = bills.filter(b => b.vendors?.id === row.id && b.balance > 0);
-        
-        // Create payments (simplified - in real app, you'd create actual payments)
-        console.log(`Creating payment of ${row.payment_amount} for vendor ${row.vendor_name}`);
-        
-        // You would create entries in vendor_bill_payments table here
-        // For now, we'll just log it
+    try {
+      // Calculate total payment
+      const totalPayment = excelRows.reduce((sum, row) => sum + row.payment_amount, 0);
+      
+      if (totalPayment === 0) {
+        toast.error("Please enter payment amounts");
+        return;
       }
+
+      // Create Excel data with all vendor details
+      const excelData = excelRows.map(row => ({
+        "Vendor ID": row.id,
+        "Vendor Name": row.vendor_name,
+        "Phone": row.vendor_phone,
+        "Email": row.vendor_email,
+        "GSTIN": row.vendor_gstin,
+        "Address": row.vendor_address,
+        "Bank Name": row.bank_name,
+        "Account Number": row.account_number,
+        "IFSC Code": row.ifsc_code,
+        "UPI ID": row.upi_id,
+        "Total Outstanding": row.total_outstanding,
+        "Payment Amount": row.payment_amount,
+        "Payment Type": row.payment_type,
+        "Notes": row.notes || "",
+      }));
+
+      // Create workbook
+      const XLSX = await import("xlsx");
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Vendor Payments");
+      
+      // Auto-size columns
+      const maxWidth = excelData.reduce((w, r) => Math.max(w, r["Vendor Name"].length), 10);
+      worksheet['!cols'] = [
+        { wch: 10 }, // Vendor ID
+        { wch: maxWidth }, // Vendor Name
+        { wch: 15 }, // Phone
+        { wch: 25 }, // Email
+        { wch: 20 }, // GSTIN
+        { wch: 40 }, // Address
+        { wch: 20 }, // Bank Name
+        { wch: 20 }, // Account Number
+        { wch: 15 }, // IFSC Code
+        { wch: 20 }, // UPI ID
+        { wch: 15 }, // Total Outstanding
+        { wch: 15 }, // Payment Amount
+        { wch: 12 }, // Payment Type
+        { wch: 30 }, // Notes
+      ];
+
+      // Add summary sheet
+      const summary = [
+        ["VENDOR PAYMENT SUMMARY"],
+        ["Generated Date:", new Date().toLocaleDateString()],
+        ["Generated Time:", new Date().toLocaleTimeString()],
+        [""],
+        ["SUMMARY"],
+        ["Total Vendors:", excelRows.length],
+        ["Total Outstanding:", excelRows.reduce((s, r) => s + r.total_outstanding, 0)],
+        ["Total Payment:", totalPayment],
+        ["Payment Coverage:", `${((totalPayment / excelRows.reduce((s, r) => s + r.total_outstanding, 0)) * 100).toFixed(2)}%`],
+        [""],
+        ["PAYMENT BREAKDOWN"],
+        ["Full Payments:", excelRows.filter(r => r.payment_type === 'full').length],
+        ["Partial Payments:", excelRows.filter(r => r.payment_type === 'partial').length],
+        [""],
+        ["NOTES"],
+        ["1. Verify GSTIN and bank details before processing payments"],
+        ["2. Ensure UPI IDs are correct for instant transfers"],
+        ["3. Cross-check IFSC codes for bank transfers"],
+        ["4. Update payment status in the system after completion"],
+      ];
+      
+      const summarySheet = XLSX.utils.aoa_to_sheet(summary);
+      XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+
+      // Generate and download
+      const fileName = `vendor-payments-${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(workbook, fileName);
+      
+      toast.success(`Excel file "${fileName}" downloaded successfully`);
+      setExcelOpen(false);
+      
+    } catch (error) {
+      console.error("Error exporting to Excel:", error);
+      toast.error("Failed to export Excel file");
     }
-    
-    toast.info("Payments recorded. Please process the payments as per the Excel sheet.");
   }
 
   /* ================= VENDOR SEARCH ================= */
@@ -358,64 +564,135 @@ export default function VendorBillsPage() {
       return;
     }
 
-    const { data } = await supabase
-      .from("vendors")
-      .select("id, name, gst_number, address")
-      .ilike("name", `%${q}%`)
-      .limit(5);
+    try {
+      const { data } = await supabase
+        .from("vendors")
+        .select("id, name, gst_number, address, account_number, ifsc_code, upi_id")
+        .ilike("name", `%${q}%`)
+        .limit(5);
 
-    setVendorSuggestions(data || []);
+      setVendorSuggestions(data || []);
+    } catch (error) {
+      console.error("Error searching vendors:", error);
+      setVendorSuggestions([]);
+    }
   }
 
   /* ================= CREATE BILL ================= */
 
   async function createBill() {
-    await fetch("/api/vendor-bills/create", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        vendor_name: vendorQuery,
-        bill_date: form.bill_date,
-        due_date: form.due_date || null,
-        total: Number(form.total),
-        notes: form.notes,
-        header: form.header,
-      }),
-    });
+    if (!vendorQuery.trim() || !form.total.trim()) {
+      toast.error("Please select a vendor and enter total amount");
+      return;
+    }
 
-    setOpen(false);
-    setVendorQuery("");
-    setSelectedVendor(null);
-    setVendorSuggestions([]);
-    setForm({ 
-      bill_date: new Date().toISOString().split("T")[0], 
-      due_date: "", 
-      total: "", 
-      notes: "", 
-      header: "" 
-    });
-    loadBills();
+    try {
+      // Find vendor ID from name
+      const { data: vendorData } = await supabase
+        .from("vendors")
+        .select("id")
+        .ilike("name", vendorQuery.trim())
+        .single();
+
+      if (!vendorData) {
+        toast.error("Vendor not found");
+        return;
+      }
+
+      const { error } = await supabase
+        .from("vendor_bills")
+        .insert({
+          vendor_id: vendorData.id,
+          bill_date: form.bill_date,
+          due_date: form.due_date || null,
+          total: Number(form.total),
+          description: form.header,
+          notes: form.notes,
+          status: "unpaid",
+        });
+
+      if (error) {
+        console.error("Error creating bill:", error);
+        toast.error("Failed to create bill");
+        return;
+      }
+
+      toast.success("Vendor bill created successfully");
+      
+      // Reset form
+      setOpen(false);
+      setVendorQuery("");
+      setSelectedVendor(null);
+      setVendorSuggestions([]);
+      setForm({ 
+        bill_date: new Date().toISOString().split("T")[0], 
+        due_date: "", 
+        total: "", 
+        notes: "", 
+        header: "" 
+      });
+      
+      // Reload bills
+      await loadBills();
+      
+    } catch (error) {
+      console.error("Error in createBill:", error);
+      toast.error("Failed to create bill");
+    }
   }
 
-  /* ================= PAY ================= */
+  /* ================= PAY BILL ================= */
 
   async function submitPayment() {
     if (!payBill || !payAmount) return;
 
-    await fetch("/api/vendor-bills/pay", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        bill_id: payBill.id,
-        amount: Number(payAmount),
-        payment_method: "bank",
-      }),
-    });
+    const amount = Number(payAmount);
+    if (amount <= 0 || amount > payBill.balance) {
+      toast.error("Invalid payment amount");
+      return;
+    }
 
-    setPayOpen(false);
-    setPayBill(null);
-    setPayAmount("");
-    loadBills();
+    try {
+      const { error } = await supabase
+        .from("vendor_bill_payments")
+        .insert({
+          vendor_bill_id: payBill.id,
+          amount: amount,
+          payment_method: "bank",
+          paid_at: new Date().toISOString(),
+        });
+
+      if (error) {
+        console.error("Error submitting payment:", error);
+        toast.error("Failed to submit payment");
+        return;
+      }
+
+      // Update bill status if fully paid
+      if (amount >= payBill.balance) {
+        await supabase
+          .from("vendor_bills")
+          .update({ status: "paid" })
+          .eq("id", payBill.id);
+      } else if (amount > 0) {
+        await supabase
+          .from("vendor_bills")
+          .update({ status: "partially_paid" })
+          .eq("id", payBill.id);
+      }
+
+      toast.success("Payment submitted successfully");
+      
+      // Reset and reload
+      setPayOpen(false);
+      setPayBill(null);
+      setPayAmount("");
+      await loadBills();
+      
+    } catch (error) {
+      console.error("Error in submitPayment:", error);
+      toast.error("Failed to submit payment");
+    }
   }
 
   /* ================= UI ================= */
@@ -426,6 +703,13 @@ export default function VendorBillsPage() {
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
           <p className="text-muted-foreground">Loading vendor bills...</p>
+          <Button 
+            variant="outline" 
+            onClick={loadBills}
+            className="mt-4"
+          >
+            Retry Loading
+          </Button>
         </div>
       </div>
     );
@@ -454,10 +738,18 @@ export default function VendorBillsPage() {
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Vendor Bills</h1>
           <p className="text-muted-foreground mt-1">
-            Manage all vendor bills and payments in one place
+            Manage vendor bills and payments
           </p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            onClick={loadBills}
+            className="gap-2"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </Button>
           <Button 
             variant="outline" 
             onClick={prepareExcelData}
@@ -465,12 +757,99 @@ export default function VendorBillsPage() {
             className="gap-2"
           >
             <FileSpreadsheet className="h-4 w-4" />
-            Export Selected ({selectedVendors.length})
+            Export ({selectedVendors.length})
           </Button>
           <Button onClick={() => setOpen(true)} className="gap-2">
             <Plus className="h-4 w-4" />
-            Add Vendor Bill
+            Add Bill
           </Button>
+        </div>
+      </div>
+
+      {/* FILTER BAR */}
+      <div className="flex flex-col md:flex-row gap-4 mb-6">
+        <div className="flex-1">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Search by vendor name or GSTIN..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="pl-10"
+            />
+          </div>
+        </div>
+        <div className="flex gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-[180px]">
+              <Filter className="h-4 w-4 mr-2" />
+              <SelectValue placeholder="Filter by status" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Bills ({bills.length})</SelectItem>
+              <SelectItem value="unpaid">Unpaid ({stats.unpaidBills})</SelectItem>
+              <SelectItem value="partially_paid">Partially Paid ({stats.partiallyPaidBills})</SelectItem>
+              <SelectItem value="paid">Paid ({stats.paidBills})</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      {/* STATS CARDS */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white rounded-xl border p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">Total Bills</p>
+              <p className="text-2xl font-bold mt-2">{stats.totalBills}</p>
+              <p className="text-xs text-gray-500 mt-1">
+                {filteredBills.length} showing
+              </p>
+            </div>
+            <FileText className="h-8 w-8 text-blue-500" />
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">Pending Amount</p>
+              <p className="text-2xl font-bold mt-2">
+                ₹{stats.pendingAmount.toLocaleString()}
+              </p>
+              <p className="text-xs text-amber-600 mt-1">
+                {stats.overdueBills} overdue
+              </p>
+            </div>
+            <TrendingUp className="h-8 w-8 text-amber-500" />
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">Total Paid</p>
+              <p className="text-2xl font-bold mt-2">
+                ₹{stats.totalPaid.toLocaleString()}
+              </p>
+              <p className="text-xs text-green-600 mt-1">
+                {stats.paidBills} paid bills
+              </p>
+            </div>
+            <CheckCircle className="h-8 w-8 text-green-500" />
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border p-6 shadow-sm">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-muted-foreground">UPI Vendors</p>
+              <p className="text-2xl font-bold mt-2">
+                {stats.vendorsWithUPI}
+              </p>
+              <p className="text-xs text-purple-600 mt-1">
+                Quick payment ready
+              </p>
+            </div>
+            <QrCode className="h-8 w-8 text-purple-500" />
+          </div>
         </div>
       </div>
 
@@ -497,132 +876,120 @@ export default function VendorBillsPage() {
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {vendors.map((vendor) => (
-            <div
-              key={vendor.id}
-              className={`border rounded-lg p-4 transition-all ${
-                selectedVendors.includes(vendor.id)
-                  ? "border-primary bg-blue-50"
-                  : "hover:border-gray-300"
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-3">
-                  <Checkbox
-                    checked={selectedVendors.includes(vendor.id)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        setSelectedVendors([...selectedVendors, vendor.id]);
-                      } else {
-                        setSelectedVendors(
-                          selectedVendors.filter((id) => id !== vendor.id)
-                        );
-                      }
-                    }}
-                  />
-                  <div>
-                    <h3 className="font-medium">{vendor.name}</h3>
-                    {vendor.gst_number && (
-                      <p className="text-sm text-muted-foreground">
-                        GSTIN: {vendor.gst_number}
-                      </p>
-                    )}
-                    {vendor.address && (
-                      <p className="text-sm text-muted-foreground line-clamp-1">
-                        {vendor.address}
-                      </p>
-                    )}
+          {vendors.map((vendor) => {
+            const hasPaymentDetails = vendor.account_number || vendor.ifsc_code || vendor.upi_id;
+            const vendorBills = bills.filter(b => b.vendors?.id === vendor.id);
+            const totalOutstanding = vendorBills.reduce((sum, bill) => sum + bill.balance, 0);
+            const unpaidBills = vendorBills.filter(b => b.balance > 0).length;
+            
+            return (
+              <div
+                key={vendor.id}
+                className={`border rounded-lg p-4 transition-all ${
+                  selectedVendors.includes(vendor.id)
+                    ? "border-primary bg-blue-50"
+                    : "hover:border-gray-300"
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex items-start gap-3 flex-1">
+                    <Checkbox
+                      checked={selectedVendors.includes(vendor.id)}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          setSelectedVendors([...selectedVendors, vendor.id]);
+                        } else {
+                          setSelectedVendors(
+                            selectedVendors.filter((id) => id !== vendor.id)
+                          );
+                        }
+                      }}
+                    />
+                    <div className="flex-1">
+                      <div className="flex items-start justify-between">
+                        <h3 className="font-medium">{vendor.name}</h3>
+                        {hasPaymentDetails && (
+                          <Badge variant="outline" className="text-xs">
+                            Bank Info
+                          </Badge>
+                        )}
+                      </div>
+                      
+                      {vendor.gst_number && (
+                        <div className="flex items-center gap-1 mt-1 text-sm text-muted-foreground">
+                          <Building2 className="h-3 w-3" />
+                          <span>GST: {vendor.gst_number}</span>
+                        </div>
+                      )}
+                      
+                      {vendor.address && (
+                        <div className="flex items-start gap-1 mt-1 text-sm text-muted-foreground">
+                          <MapPin className="h-3 w-3 mt-0.5 flex-shrink-0" />
+                          <span className="line-clamp-1">{vendor.address}</span>
+                        </div>
+                      )}
+                      
+                      {/* Payment Details Summary */}
+                      {(vendor.account_number || vendor.upi_id) && (
+                        <div className="mt-2 pt-2 border-t border-gray-100">
+                          <div className="flex flex-wrap gap-2">
+                            {vendor.account_number && (
+                              <div className="flex items-center gap-1 text-xs">
+                                <Banknote className="h-3 w-3" />
+                                <span>Acct: ••••{vendor.account_number.slice(-4)}</span>
+                              </div>
+                            )}
+                            {vendor.upi_id && (
+                              <div className="flex items-center gap-1 text-xs">
+                                <QrCode className="h-3 w-3" />
+                                <span>UPI: {vendor.upi_id}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      setEditVendor(vendor);
+                      setEditForm({
+                        gst_number: vendor.gst_number || "",
+                        address: vendor.address || "",
+                        bank_name: "", // Not stored in DB
+                        account_number: vendor.account_number || "",
+                        ifsc_code: vendor.ifsc_code || "",
+                        upi_id: vendor.upi_id || "",
+                        payment_terms: "", // Not stored in DB
+                      });
+                    }}
+                  >
+                    <Edit className="h-4 w-4" />
+                  </Button>
                 </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    setEditVendor(vendor);
-                    setEditForm({
-                      gst_number: vendor.gst_number || "",
-                      address: vendor.address || "",
-                      bank_name: vendor.payment_details?.bank_name || "",
-                      account_number: vendor.payment_details?.account_number || "",
-                      ifsc_code: vendor.payment_details?.ifsc_code || "",
-                      upi_id: vendor.payment_details?.upi_id || "",
-                      payment_terms: vendor.payment_details?.payment_terms || "",
-                    });
-                  }}
-                >
-                  <Edit className="h-4 w-4" />
-                </Button>
-              </div>
-              
-              {selectedVendors.includes(vendor.id) && (
+                
+                {/* Bill Summary */}
                 <div className="mt-3 pt-3 border-t">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">Outstanding:</span>
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-3 w-3 text-gray-400" />
+                      <span className="text-muted-foreground">Bills:</span>
+                      <span>{unpaidBills} pending</span>
+                    </div>
                     <span className="font-medium text-amber-600">
-                      ₹{bills
-                        .filter(b => b.vendors?.id === vendor.id)
-                        .reduce((sum, bill) => sum + bill.balance, 0)
-                        .toLocaleString()}
+                      ₹{totalOutstanding.toLocaleString()}
                     </span>
                   </div>
                 </div>
-              )}
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       </div>
 
-      {/* STATS CARDS */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white rounded-xl border p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">Total Bills</p>
-              <p className="text-2xl font-bold mt-2">{bills.length}</p>
-            </div>
-            <FileText className="h-8 w-8 text-blue-500" />
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">Pending Amount</p>
-              <p className="text-2xl font-bold mt-2">
-                ₹{bills.reduce((sum, bill) => sum + bill.balance, 0).toLocaleString()}
-              </p>
-            </div>
-            <TrendingUp className="h-8 w-8 text-amber-500" />
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">Total Paid</p>
-              <p className="text-2xl font-bold mt-2">
-                ₹{bills.reduce((sum, bill) => sum + bill.paid, 0).toLocaleString()}
-              </p>
-            </div>
-            <CheckCircle className="h-8 w-8 text-green-500" />
-          </div>
-        </div>
-        <div className="bg-white rounded-xl border p-6 shadow-sm">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm text-muted-foreground">Overdue</p>
-              <p className="text-2xl font-bold mt-2">
-                {bills.filter(b => 
-                  b.due_date && 
-                  new Date(b.due_date) < new Date() && 
-                  b.balance > 0
-                ).length}
-              </p>
-            </div>
-            <AlertCircle className="h-8 w-8 text-red-500" />
-          </div>
-        </div>
-      </div>
-
-      {/* TABLE */}
+      {/* BILLS TABLE */}
       <div className="bg-white rounded-xl border overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -639,206 +1006,272 @@ export default function VendorBillsPage() {
               </tr>
             </thead>
             <tbody>
-              {bills.map((b) => {
-                const isOverdue = b.due_date && new Date(b.due_date) < new Date() && b.balance > 0;
-                
-                return (
-                  <tr key={b.id} className="border-b hover:bg-gray-50/50 transition-colors">
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <div className="bg-blue-50 p-2 rounded-lg">
-                          <User className="h-4 w-4 text-blue-600" />
+              {filteredBills.length > 0 ? (
+                filteredBills.map((b) => {
+                  const isOverdue = b.due_date && new Date(b.due_date) < new Date() && b.balance > 0;
+                  const hasUPI = b.vendors?.upi_id;
+                  
+                  return (
+                    <tr key={b.id} className="border-b hover:bg-gray-50/50 transition-colors">
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <div className="bg-blue-50 p-2 rounded-lg">
+                            <User className="h-4 w-4 text-blue-600" />
+                          </div>
+                          <div>
+                            <p
+                              className="font-medium text-blue-600 hover:text-blue-800 cursor-pointer transition-colors flex items-center gap-1"
+                              onClick={() =>
+                                router.push(`/admin/vendors/${b.vendors?.id}`)
+                              }
+                            >
+                              {b.vendors?.name || "Unknown Vendor"}
+                              <ChevronRight className="h-3 w-3" />
+                            </p>
+                            <div className="flex items-center gap-2 mt-1">
+                              {b.vendors?.gst_number && (
+                                <Badge variant="outline" className="text-xs">
+                                  GST: {b.vendors.gst_number}
+                                </Badge>
+                              )}
+                              {hasUPI && (
+                                <Badge variant="secondary" className="text-xs">
+                                  UPI: {b.vendors?.upi_id}
+                                </Badge>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        <div>
-                          <p
-                            className="font-medium text-blue-600 hover:text-blue-800 cursor-pointer transition-colors flex items-center gap-1"
-                            onClick={() =>
-                              router.push(`/admin/vendors/${b.vendors?.id}`)
-                            }
-                          >
-                            {b.vendors?.name}
-                            <ChevronRight className="h-3 w-3" />
-                          </p>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-3 w-3 text-gray-400" />
+                          <span>{new Date(b.bill_date).toLocaleDateString()}</span>
                         </div>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-3 w-3 text-gray-400" />
-                        <span>{b.bill_date}</span>
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <CalendarDays className={`h-3 w-3 ${isOverdue ? 'text-red-400' : 'text-gray-400'}`} />
-                        <span className={isOverdue ? 'text-red-600 font-medium' : ''}>
-                          {b.due_date || "-"}
-                          {isOverdue && (
-                            <span className="ml-1 text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
-                              Overdue
-                            </span>
-                          )}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="p-4 font-medium">
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="h-3 w-3 text-gray-400" />
-                        ₹{b.total.toLocaleString()}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2 text-green-600">
-                        <CheckCircle className="h-3 w-3" />
-                        ₹{b.paid.toLocaleString()}
-                      </div>
-                    </td>
-                    <td className="p-4 font-medium">
-                      <div className={`flex items-center gap-2 ${b.balance > 0 ? 'text-amber-600' : 'text-green-600'}`}>
-                        <CreditCard className="h-3 w-3" />
-                        ₹{b.balance.toLocaleString()}
-                      </div>
-                    </td>
-                    <td className="p-4">
-                      <Badge 
-                        variant="outline"
-                        className={`${getStatusColor(b.status)} border flex items-center gap-1.5 px-3 py-1.5`}
-                      >
-                        {getStatusIcon(b.status)}
-                        {b.status.replace('_', ' ')}
-                      </Badge>
-                    </td>
-                    <td className="p-4">
-                      <div className="flex items-center gap-2">
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 px-3"
-                                onClick={() =>
-                                  router.push(`/admin/vendors/${b.vendors?.id}`)
-                                }
-                              >
-                                <History className="h-3.5 w-3.5" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>
-                              <p>View History</p>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                        
-                        <Button
-                          size="sm"
-                          disabled={b.balance === 0}
-                          className="h-8 px-3"
-                          onClick={() => {
-                            setPayBill(b);
-                            setPayAmount(String(b.balance));
-                            setPayOpen(true);
-                          }}
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <CalendarDays className={`h-3 w-3 ${isOverdue ? 'text-red-400' : 'text-gray-400'}`} />
+                          <span className={isOverdue ? 'text-red-600 font-medium' : ''}>
+                            {b.due_date ? new Date(b.due_date).toLocaleDateString() : "-"}
+                            {isOverdue && (
+                              <span className="ml-1 text-xs bg-red-100 text-red-700 px-1.5 py-0.5 rounded">
+                                Overdue
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      </td>
+                      <td className="p-4 font-medium">
+                        <div className="flex items-center gap-2">
+                          <DollarSign className="h-3 w-3 text-gray-400" />
+                          ₹{b.total.toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2 text-green-600">
+                          <CheckCircle className="h-3 w-3" />
+                          ₹{b.paid.toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="p-4 font-medium">
+                        <div className={`flex items-center gap-2 ${b.balance > 0 ? 'text-amber-600' : 'text-green-600'}`}>
+                          <CreditCard className="h-3 w-3" />
+                          ₹{b.balance.toLocaleString()}
+                        </div>
+                      </td>
+                      <td className="p-4">
+                        <Badge 
+                          variant="outline"
+                          className={`${getStatusColor(b.status)} border flex items-center gap-1.5 px-3 py-1.5`}
                         >
-                          <CreditCard className="h-3.5 w-3.5 mr-1" />
-                          Pay
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
+                          {getStatusIcon(b.status)}
+                          {b.status.replace('_', ' ')}
+                        </Badge>
+                      </td>
+                      <td className="p-4">
+                        <div className="flex items-center gap-2">
+                          <TooltipProvider>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8 px-3"
+                                  onClick={() =>
+                                    router.push(`/admin/vendors/${b.vendors?.id}`)
+                                  }
+                                  disabled={!b.vendors?.id}
+                                >
+                                  <History className="h-3.5 w-3.5" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>
+                                <p>View History</p>
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                          
+                          <Button
+                            size="sm"
+                            disabled={b.balance === 0}
+                            className="h-8 px-3"
+                            onClick={() => {
+                              setPayBill(b);
+                              setPayAmount(String(b.balance));
+                              setPayOpen(true);
+                            }}
+                          >
+                            <CreditCard className="h-3.5 w-3.5 mr-1" />
+                            Pay
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
+              ) : (
+                <tr>
+                  <td colSpan={8} className="p-8 text-center">
+                    <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                    <h3 className="text-lg font-semibold text-gray-600 mb-2">
+                      {bills.length === 0 ? 'No vendor bills found' : 'No bills match your filters'}
+                    </h3>
+                    <p className="text-gray-500 mb-6">
+                      {bills.length === 0 
+                        ? 'Get started by creating your first vendor bill' 
+                        : 'Try changing your search or filter criteria'}
+                    </p>
+                    {bills.length === 0 && (
+                      <Button onClick={() => setOpen(true)}>
+                        Create Vendor Bill
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
-        
-        {bills.length === 0 && (
-          <div className="text-center py-12">
-            <FileText className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-semibold text-gray-600 mb-2">No vendor bills found</h3>
-            <p className="text-gray-500 mb-6">Get started by creating your first vendor bill</p>
-            <Button onClick={() => setOpen(true)}>
-              Create Vendor Bill
-            </Button>
-          </div>
-        )}
       </div>
 
       {/* EXCEL EXPORT MODAL */}
       <Dialog open={excelOpen} onOpenChange={setExcelOpen}>
-        <DialogContent className="sm:max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-6xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileSpreadsheet className="h-5 w-5" />
-              Create Payment Excel Sheet
+              Create Vendor Payment Sheet
             </DialogTitle>
             <DialogDescription>
-              Enter payment amounts for each vendor. You can specify partial or full payments.
+              Complete payment sheet with vendor details for batch processing
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full text-sm border">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="p-3 text-left font-medium">Vendor</th>
-                    <th className="p-3 text-left font-medium">GSTIN</th>
-                    <th className="p-3 text-left font-medium">Address</th>
-                    <th className="p-3 text-left font-medium">Outstanding</th>
-                    <th className="p-3 text-left font-medium">Payment Amount</th>
-                    <th className="p-3 text-left font-medium">Type</th>
-                    <th className="p-3 text-left font-medium">Notes</th>
+                    <th className="p-3 text-left font-medium border">Vendor</th>
+                    <th className="p-3 text-left font-medium border">GSTIN</th>
+                    <th className="p-3 text-left font-medium border">Address</th>
+                    <th className="p-3 text-left font-medium border">Bank Name</th>
+                    <th className="p-3 text-left font-medium border">Account No.</th>
+                    <th className="p-3 text-left font-medium border">IFSC</th>
+                    <th className="p-3 text-left font-medium border">UPI ID</th>
+                    <th className="p-3 text-left font-medium border">Outstanding</th>
+                    <th className="p-3 text-left font-medium border">Payment</th>
+                    <th className="p-3 text-left font-medium border">Type</th>
+                    <th className="p-3 text-left font-medium border">Notes</th>
                   </tr>
                 </thead>
                 <tbody>
                   {excelRows.map((row, index) => (
                     <tr key={row.id} className="border-b hover:bg-gray-50">
-                      <td className="p-3 font-medium">{row.vendor_name}</td>
-                      <td className="p-3">
+                      <td className="p-3 font-medium border">{row.vendor_name}</td>
+                      <td className="p-3 border">
                         <Input
                           value={row.vendor_gstin}
                           onChange={(e) => updateExcelRow(index, 'vendor_gstin', e.target.value)}
                           placeholder="Enter GSTIN"
+                          className="text-xs"
                         />
                       </td>
-                      <td className="p-3">
+                      <td className="p-3 border">
                         <Textarea
                           value={row.vendor_address}
                           onChange={(e) => updateExcelRow(index, 'vendor_address', e.target.value)}
                           placeholder="Enter address"
                           rows={2}
+                          className="text-xs"
                         />
                       </td>
-                      <td className="p-3 font-medium">
+                      <td className="p-3 border">
+                        <Input
+                          value={row.bank_name}
+                          onChange={(e) => updateExcelRow(index, 'bank_name', e.target.value)}
+                          placeholder="Bank name (enter manually)"
+                          className="text-xs"
+                        />
+                      </td>
+                      <td className="p-3 border">
+                        <Input
+                          value={row.account_number}
+                          onChange={(e) => updateExcelRow(index, 'account_number', e.target.value)}
+                          placeholder="Account number"
+                          className="text-xs"
+                        />
+                      </td>
+                      <td className="p-3 border">
+                        <Input
+                          value={row.ifsc_code}
+                          onChange={(e) => updateExcelRow(index, 'ifsc_code', e.target.value.toUpperCase())}
+                          placeholder="IFSC code"
+                          className="text-xs uppercase"
+                        />
+                      </td>
+                      <td className="p-3 border">
+                        <Input
+                          value={row.upi_id}
+                          onChange={(e) => updateExcelRow(index, 'upi_id', e.target.value)}
+                          placeholder="UPI ID"
+                          className="text-xs"
+                        />
+                      </td>
+                      <td className="p-3 font-medium border">
                         ₹{row.total_outstanding.toLocaleString()}
                       </td>
-                      <td className="p-3">
+                      <td className="p-3 border">
                         <div className="relative">
                           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <span className="text-gray-400">₹</span>
+                            <span className="text-gray-400 text-xs">₹</span>
                           </div>
                           <Input
                             type="number"
                             value={row.payment_amount}
                             onChange={(e) => updateExcelRow(index, 'payment_amount', e.target.value)}
-                            className="pl-10"
+                            className="pl-10 text-xs"
                             max={row.total_outstanding}
                             min={0}
                             placeholder="0"
                           />
                         </div>
                       </td>
-                      <td className="p-3">
-                        <Badge variant={row.payment_type === 'full' ? 'default' : 'secondary'}>
+                      <td className="p-3 border">
+                        <Badge 
+                          variant={row.payment_type === 'full' ? 'default' : 'secondary'}
+                          className="text-xs"
+                        >
                           {row.payment_type}
                         </Badge>
                       </td>
-                      <td className="p-3">
+                      <td className="p-3 border">
                         <Input
                           value={row.notes || ''}
                           onChange={(e) => updateExcelRow(index, 'notes', e.target.value)}
                           placeholder="Payment notes"
+                          className="text-xs"
                         />
                       </td>
                     </tr>
@@ -847,19 +1280,43 @@ export default function VendorBillsPage() {
               </table>
             </div>
 
-            <div className="bg-gray-50 rounded-lg p-4">
-              <div className="flex justify-between items-center">
+            <div className="bg-gray-50 rounded-lg p-4 border">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div>
-                  <p className="text-sm text-gray-600">Total Payment:</p>
-                  <p className="text-2xl font-bold">
+                  <p className="text-sm font-medium text-gray-700">Total Vendors</p>
+                  <p className="text-2xl font-bold">{excelRows.length}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700">Total Outstanding</p>
+                  <p className="text-2xl font-bold text-amber-600">
+                    ₹{excelRows.reduce((sum, row) => sum + row.total_outstanding, 0).toLocaleString()}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-700">Total Payment</p>
+                  <p className="text-2xl font-bold text-green-600">
                     ₹{excelRows.reduce((sum, row) => sum + row.payment_amount, 0).toLocaleString()}
                   </p>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm text-gray-600">Total Outstanding:</p>
-                  <p className="text-xl">
-                    ₹{excelRows.reduce((sum, row) => sum + row.total_outstanding, 0).toLocaleString()}
+                <div>
+                  <p className="text-sm font-medium text-gray-700">Payment Coverage</p>
+                  <p className="text-2xl font-bold">
+                    {excelRows.reduce((sum, row) => sum + row.total_outstanding, 0) > 0
+                      ? `${((excelRows.reduce((sum, row) => sum + row.payment_amount, 0) / 
+                          excelRows.reduce((sum, row) => sum + row.total_outstanding, 0)) * 100).toFixed(1)}%`
+                      : '0%'}
                   </p>
+                </div>
+              </div>
+              
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm text-gray-600">Vendors with UPI:</p>
+                  <p>{excelRows.filter(r => r.upi_id).length} vendors</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-600">Vendors with Bank Details:</p>
+                  <p>{excelRows.filter(r => r.account_number).length} vendors</p>
                 </div>
               </div>
             </div>
@@ -873,17 +1330,17 @@ export default function VendorBillsPage() {
               </Button>
               <Button 
                 onClick={exportToExcel}
-                className="gap-2"
+                className="gap-2 bg-green-600 hover:bg-green-700"
               >
                 <Download className="h-4 w-4" />
-                Download Excel
+                Download Excel Sheet
               </Button>
             </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* EDIT VENDOR MODAL */}
+      {/* EDIT VENDOR MODAL - Updated for your schema */}
       <Dialog open={!!editVendor} onOpenChange={(open) => !open && setEditVendor(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
@@ -892,7 +1349,7 @@ export default function VendorBillsPage() {
               Edit Vendor Details
             </DialogTitle>
             <DialogDescription>
-              Update GSTIN, address, and payment details for {editVendor?.name}
+              Update vendor information for {editVendor?.name}
             </DialogDescription>
           </DialogHeader>
 
@@ -918,53 +1375,66 @@ export default function VendorBillsPage() {
               </div>
 
               <div className="space-y-4 pt-4 border-t">
-                <h4 className="font-medium">Payment Details</h4>
+                <h4 className="font-medium">Payment Information</h4>
                 
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <Label>Bank Name</Label>
-                    <Input
-                      value={editForm.bank_name}
-                      onChange={(e) => setEditForm({...editForm, bank_name: e.target.value})}
-                      placeholder="Bank name"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Account Number</Label>
+                    <Label className="flex items-center gap-1">
+                      <CreditCard className="h-3 w-3" />
+                      Account Number
+                    </Label>
                     <Input
                       value={editForm.account_number}
                       onChange={(e) => setEditForm({...editForm, account_number: e.target.value})}
-                      placeholder="Account number"
+                      placeholder="Bank account number"
                     />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label>IFSC Code</Label>
                     <Input
                       value={editForm.ifsc_code}
-                      onChange={(e) => setEditForm({...editForm, ifsc_code: e.target.value})}
+                      onChange={(e) => setEditForm({...editForm, ifsc_code: e.target.value.toUpperCase()})}
                       placeholder="IFSC code"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>UPI ID</Label>
-                    <Input
-                      value={editForm.upi_id}
-                      onChange={(e) => setEditForm({...editForm, upi_id: e.target.value})}
-                      placeholder="UPI ID"
                     />
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Payment Terms</Label>
+                  <Label className="flex items-center gap-1">
+                    <QrCode className="h-3 w-3" />
+                    UPI ID
+                  </Label>
+                  <Input
+                    value={editForm.upi_id}
+                    onChange={(e) => setEditForm({...editForm, upi_id: e.target.value})}
+                    placeholder="UPI ID (e.g., vendor@upi)"
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Bank Name (for Excel)</Label>
+                  <Input
+                    value={editForm.bank_name}
+                    onChange={(e) => setEditForm({...editForm, bank_name: e.target.value})}
+                    placeholder="Enter bank name for Excel export"
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    This will be used in Excel exports but not stored in database
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Payment Terms (for Excel)</Label>
                   <Input
                     value={editForm.payment_terms}
                     onChange={(e) => setEditForm({...editForm, payment_terms: e.target.value})}
                     placeholder="E.g., Net 30, COD, etc."
+                    className="text-sm"
                   />
+                  <p className="text-xs text-gray-500">
+                    This will be used in Excel exports but not stored in database
+                  </p>
                 </div>
               </div>
 
@@ -1003,7 +1473,11 @@ export default function VendorBillsPage() {
               <div className="bg-gray-50 rounded-lg p-4 space-y-3">
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Vendor:</span>
-                  <span className="font-medium">{payBill.vendors?.name}</span>
+                  <span className="font-medium">{payBill.vendors?.name || "Unknown Vendor"}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-sm text-gray-600">GSTIN:</span>
+                  <span className="text-sm">{payBill.vendors?.gst_number || "N/A"}</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-sm text-gray-600">Total Amount:</span>
@@ -1117,7 +1591,15 @@ export default function VendorBillsPage() {
                       }}
                     >
                       <User className="h-4 w-4 text-gray-400" />
-                      <span className="font-medium">{v.name}</span>
+                      <div>
+                        <span className="font-medium">{v.name}</span>
+                        {v.gst_number && (
+                          <p className="text-xs text-gray-500">GSTIN: {v.gst_number}</p>
+                        )}
+                        {v.upi_id && (
+                          <p className="text-xs text-green-500">UPI: {v.upi_id}</p>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
