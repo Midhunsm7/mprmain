@@ -56,13 +56,13 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       ],
     },
     {
-      title: "Inventory Management",
+      title: "STORE Management",
       icon: Package,
       options: [
         { name: "Resort Inventory", link: "/admin/inventory", shortcut: "⌘I" },
         { name: "Inventory Requests", link: "/admin/inventory-requests", shortcut: "⌘Q" },
         { name: "Dishes & Recipes", link: "/admin/dishes", shortcut: "⌘S" },
-        { name: "Vendor Bills", link: "/admin/vendor-bills", shortcut: "⌘V" },
+        
         { name: "Purchases", link: "/admin/purchases", shortcut: "⌘P" },
       ],
     },
@@ -91,6 +91,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         { name: "KOT Management", link: "/admin/kot", shortcut: "⌘K" },
         { name: "KOT Bills", link: "/admin/kot/bills", shortcut: "⌘B" },
         { name: "KOT Revenue", link: "/admin/kot/revenue", shortcut: "⌘V" },
+      ],
+    },
+        {
+      title: "Vendor Management",
+      icon: Package,
+      options: [
+        
+        
+        { name: "Vendor Adding", link: "/admin/vendoradding", shortcut: "⌘S" },
+        { name: "Vendor Bills", link: "/admin/vendor-bills", shortcut: "⌘V" },
+        
       ],
     },
   ];

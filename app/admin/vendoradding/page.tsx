@@ -1,11 +1,22 @@
 "use client";
 
 import { useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
+import { 
+  Building2, 
+  Phone, 
+  Mail, 
+  FileText, 
+  MapPin, 
+  CreditCard, 
+  DollarSign,
+  Plus,
+  Loader2
+} from "lucide-react";
 
 export default function VendorAddingPage() {
   const [loading, setLoading] = useState(false);
@@ -20,11 +31,61 @@ export default function VendorAddingPage() {
     outstanding_amount: "",
   });
 
+  const formFields = [
+    {
+      key: "name" as const,
+      label: "Company Name",
+      placeholder: "Vendor / Company Name",
+      required: true,
+      icon: Building2,
+    },
+    {
+      key: "phone" as const,
+      label: "Phone Number",
+      placeholder: "+91 98765 43210",
+      icon: Phone,
+    },
+    {
+      key: "email" as const,
+      label: "Email Address",
+      placeholder: "vendor@example.com",
+      type: "email",
+      icon: Mail,
+    },
+    {
+      key: "gst_number" as const,
+      label: "GSTIN Number",
+      placeholder: "27ABCDE1234F1Z5",
+      icon: FileText,
+    },
+    {
+      key: "address" as const,
+      label: "Business Address",
+      placeholder: "Street, City, State, PIN",
+      icon: MapPin,
+    },
+    {
+      key: "account_number" as const,
+      label: "Bank Account",
+      placeholder: "XXXX XXXX XXXX XXXX",
+      icon: CreditCard,
+    },
+    {
+      key: "outstanding_amount" as const,
+      label: "Outstanding Balance",
+      placeholder: "0.00",
+      type: "number",
+      icon: DollarSign,
+    },
+  ];
+
   function updateField(field: keyof typeof form, value: string) {
     setForm(prev => ({ ...prev, [field]: value }));
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(e?: React.FormEvent) {
+    e?.preventDefault();
+    
     if (!form.name.trim()) {
       toast.error("Company name is required");
       return;
@@ -57,7 +118,9 @@ export default function VendorAddingPage() {
         throw new Error(result.error || "Failed to add vendor");
       }
 
-      toast.success("Vendor added successfully");
+      toast.success("🎉 Vendor added successfully", {
+        description: `${form.name} has been registered in the system.`,
+      });
 
       // Reset form
       setForm({
@@ -71,103 +134,201 @@ export default function VendorAddingPage() {
       });
     } catch (err: any) {
       console.error(err);
-      toast.error(err.message || "Something went wrong");
+      toast.error("Failed to add vendor", {
+        description: err.message || "Please check the details and try again.",
+      });
     } finally {
       setLoading(false);
     }
   }
 
   return (
-    <div className="p-6">
-      <Card className="max-w-2xl mx-auto">
-        <CardHeader>
-          <CardTitle>Add Vendor</CardTitle>
-        </CardHeader>
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-8">
+      <div className="max-w-3xl mx-auto">
+        {/* Header */}
+        <div className="mb-8">
+          <h1 className="text-3xl md:text-4xl font-bold text-gray-900">
+            Add New Vendor
+          </h1>
+          <p className="text-gray-600 mt-2">
+            Register a new vendor to your business network. Fill in the details below.
+          </p>
+        </div>
 
-        <CardContent className="space-y-4">
-          {/* Company Name */}
-          <div>
-            <Label>Company Name *</Label>
-            <Input
-              placeholder="Vendor / Company Name"
-              value={form.name}
-              onChange={e => updateField("name", e.target.value)}
-            />
+        {/* Main Card */}
+        <Card className="border-0 shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-blue-600 to-indigo-600">
+            <CardHeader className="pb-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-white/10 rounded-lg backdrop-blur-sm">
+                  <Building2 className="w-6 h-6 text-white" />
+                </div>
+                <div>
+                  <CardTitle className="text-2xl text-white">
+                    Vendor Information
+                  </CardTitle>
+                  <CardDescription className="text-blue-100">
+                    Enter the vendor details carefully
+                  </CardDescription>
+                </div>
+              </div>
+            </CardHeader>
           </div>
 
-          {/* Phone */}
-          <div>
-            <Label>Phone</Label>
-            <Input
-              placeholder="Phone number"
-              value={form.phone}
-              onChange={e => updateField("phone", e.target.value)}
-            />
-          </div>
+          <CardContent className="p-6 md:p-8">
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {formFields.map((field) => {
+                  const Icon = field.icon;
+                  return (
+                    <div 
+                      key={field.key}
+                      className={field.key === "name" || field.key === "address" ? "md:col-span-2" : ""}
+                    >
+                      <Label 
+                        htmlFor={field.key}
+                        className="text-sm font-medium text-gray-700 mb-2 flex items-center gap-2"
+                      >
+                        <Icon className="w-4 h-4" />
+                        {field.label}
+                        {field.required && (
+                          <span className="text-red-500">*</span>
+                        )}
+                      </Label>
+                      <div className="relative">
+                        <Input
+                          id={field.key}
+                          type={field.type || "text"}
+                          placeholder={field.placeholder}
+                          value={form[field.key]}
+                          onChange={e => updateField(field.key, e.target.value)}
+                          className="pl-10 h-11 border-gray-300 focus:border-blue-500 focus:ring-blue-500 transition-all"
+                          required={field.required}
+                        />
+                        <div className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400">
+                          <Icon className="w-5 h-5" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
 
-          {/* Email */}
-          <div>
-            <Label>Email</Label>
-            <Input
-              placeholder="Email address"
-              value={form.email}
-              onChange={e => updateField("email", e.target.value)}
-            />
-          </div>
+              {/* Outstanding Amount Highlight */}
+              {form.outstanding_amount && parseFloat(form.outstanding_amount) > 0 && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2 bg-amber-100 rounded-full">
+                        <DollarSign className="w-5 h-5 text-amber-600" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-amber-900">
+                          Outstanding Balance
+                        </p>
+                        <p className="text-sm text-amber-700">
+                          Vendor has an outstanding amount
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-2xl font-bold text-amber-900">
+                      ₹{parseFloat(form.outstanding_amount).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              )}
 
-          {/* GSTIN */}
-          <div>
-            <Label>GSTIN (optional)</Label>
-            <Input
-              placeholder="GSTIN number"
-              value={form.gst_number}
-              onChange={e => updateField("gst_number", e.target.value)}
-            />
-          </div>
+              {/* Action Buttons */}
+              <div className="flex flex-col sm:flex-row gap-4 pt-6 border-t border-gray-200">
+                <Button
+                  type="submit"
+                  className="flex-1 h-12 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-lg hover:shadow-xl transition-all"
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    <>
+                      <Plus className="w-5 h-5 mr-2" />
+                      Add Vendor
+                    </>
+                  )}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-12 border-gray-300 text-gray-700 hover:bg-gray-50"
+                  onClick={() => setForm({
+                    name: "",
+                    phone: "",
+                    email: "",
+                    gst_number: "",
+                    address: "",
+                    account_number: "",
+                    outstanding_amount: "",
+                  })}
+                  disabled={loading}
+                >
+                  Clear All
+                </Button>
+              </div>
 
-          {/* Address */}
-          <div>
-            <Label>Address</Label>
-            <Input
-              placeholder="Vendor address"
-              value={form.address}
-              onChange={e => updateField("address", e.target.value)}
-            />
-          </div>
+              {/* Form Tips */}
+              <div className="text-sm text-gray-500 pt-4 border-t border-gray-200">
+                <p className="flex items-center gap-2">
+                  <span className="text-red-500">*</span>
+                  Required fields
+                </p>
+                <p className="mt-1">
+                  All information will be securely stored and can be updated later.
+                </p>
+              </div>
+            </form>
+          </CardContent>
+        </Card>
 
-          {/* Account Number */}
-          <div>
-            <Label>Account Number</Label>
-            <Input
-              placeholder="Bank account number"
-              value={form.account_number}
-              onChange={e => updateField("account_number", e.target.value)}
-            />
-          </div>
-
-          {/* Outstanding Amount */}
-          <div>
-            <Label>Outstanding Amount</Label>
-            <Input
-              type="number"
-              placeholder="0"
-              value={form.outstanding_amount}
-              onChange={e =>
-                updateField("outstanding_amount", e.target.value)
-              }
-            />
-          </div>
-
-          {/* Submit */}
-          <Button
-            className="w-full"
-            onClick={handleSubmit}
-            disabled={loading}
-          >
-            {loading ? "Saving..." : "Add Vendor"}
-          </Button>
-        </CardContent>
-      </Card>
+        {/* Quick Stats/Info */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-8">
+          <Card className="border-0 shadow-sm bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Total Vendors</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">Coming Soon</p>
+                </div>
+                <Building2 className="w-10 h-10 text-blue-500 opacity-20" />
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card className="border-0 shadow-sm bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Active GST</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">Coming Soon</p>
+                </div>
+                <FileText className="w-10 h-10 text-green-500 opacity-20" />
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card className="border-0 shadow-sm bg-white/50 backdrop-blur-sm">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-600">Outstanding</p>
+                  <p className="text-2xl font-bold text-gray-900 mt-1">₹0</p>
+                </div>
+                <DollarSign className="w-10 h-10 text-amber-500 opacity-20" />
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
     </div>
   );
 }
