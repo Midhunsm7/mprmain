@@ -1,7 +1,7 @@
 import type { Metadata } from "next"
 import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
-import { Toaster } from "sonner" // ✅ Add this for toast notifications
+import { Toaster } from "sonner"
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -14,8 +14,18 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: "MOUNTAIN PASS RESIDENCY ",
+  title: "MOUNTAIN PASS RESIDENCY",
   description: "MOUNTAIN PASS RESIDENCY PMS",
+
+  // ✅ PWA / App icons
+  manifest: "/manifest.json",
+  icons: {
+    icon: [
+      { url: "/square-image.png", type: "image/png" },
+      { url: "/square-image.jpg", type: "image/jpeg" },
+    ],
+    apple: "/square-image.png",
+  },
 }
 
 export default function RootLayout({
