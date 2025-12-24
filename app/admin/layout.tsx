@@ -225,16 +225,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           href: "/admin/purchases?new=true",
           keywords: ["purchase", "request", "buy", "order"],
         },
-        {
-          id: "action-open-settings",
-          label: "Open Settings",
-          subtitle: "Account and system settings",
-          groupId: "actions",
-          icon: <Settings className="size-4" />,
-          shortcut: ["⌘", ","],
-          href: "/admin/settings",
-          keywords: ["settings", "preferences", "account", "profile"],
-        },
+          {
+            id: "action-open-settings",
+            label: "Open Settings",
+            subtitle: "Account and system settings",
+            groupId: "actions",
+            icon: <Settings className="size-4" />,
+            shortcut: ["⌘", ","],
+            href: "/admin/settings",
+            keywords: ["settings", "preferences", "account", "profile"],
+          },
       ];
 
       if (!q) return items;
@@ -453,32 +453,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                   <Search size={20} className="text-gray-600" />
                 </button>
                 
-                {/* Notifications */}
-                <button className="p-2 rounded-lg hover:bg-gray-100 transition-colors relative">
-                  <Bell size={20} className="text-gray-600" />
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center font-medium">
-                    3
-                  </span>
-                </button>
-                
-                {/* Settings Button */}
-                <button 
-                  onClick={handleSettingsClick}
-                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors relative group"
-                >
-                  <Settings size={20} className="text-gray-600 group-hover:text-blue-600 transition-colors" />
-                  {/* Tooltip */}
-                  <div className="absolute -top-10 right-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
-                    <div className="bg-gray-900 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                      Settings
-                    </div>
-                  </div>
-                </button>
+              
                 
                 {/* User Profile */}
                 <div className="flex items-center space-x-2">
                   <div className="hidden lg:block text-right">
-                    <p className="text-sm font-medium text-gray-800">Admin User</p>
+                    <p className="text-sm font-medium text-gray-800">MOUNTAIN PASS</p>
                     <p className="text-xs text-gray-500">Administrator</p>
                   </div>
                   <div className="w-8 h-8 lg:w-9 lg:h-9 rounded-full bg-gradient-to-br from-blue-500 to-cyan-400 flex items-center justify-center text-white font-semibold flex-shrink-0 cursor-pointer hover:scale-105 transition-transform">
