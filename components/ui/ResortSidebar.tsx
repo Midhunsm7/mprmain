@@ -62,6 +62,23 @@ const defaultSections: SidebarSection[] = [
     ],
   },
   {
+    title: "Cook ",
+    icon: Hotel,
+    options: [
+      { name: "Dashboard", link: "/cook", shortcut: "⌘B" },
+      { name: "Kitchen Inventory Requests", link: "/cook/req", shortcut: "⌘C" },
+      { name: "Dishes", link: "/cook/dishes", shortcut: "⌘D" },
+    ],
+  },
+   {
+    title: "Housekeeping ",
+    icon: Hotel,
+    options: [
+      { name: "Dashboard", link: "/housekeeping", shortcut: "⌘B" },
+
+    ],
+  },
+  {
     title: "Inventory & Supplies",
     icon: UtensilsCrossed,
     options: [
