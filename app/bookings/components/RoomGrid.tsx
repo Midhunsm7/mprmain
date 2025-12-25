@@ -15,17 +15,24 @@ export interface Room {
     | "Suite"
     | "Deluxe Non AC"
     | "Handicap"
-  status: "free" | "occupied" | "maintenance" | "housekeeping"
+  status: string
   pricePerDay: number
   guestId?: string | null
+  current_guest_id?: string | null
+  pin?: string | null
 }
 
 interface RoomGridProps {
   rooms: Room[]
   selectedRooms: Room[]
-  guests: Array<{ id: string; name: string }>
+  guests: Array<{ 
+    id: string; 
+    name: string;
+    status: string;
+    room_ids?: string[];
+  }>
   onRoomClick: (room: Room) => void
-  onStatusChange: (roomId: string, status: Room["status"]) => void
+  onStatusChange: (roomId: string, status: string) => void
   onSelectionChange?: (rooms: Room[]) => void
 }
 
@@ -87,13 +94,24 @@ export default function RoomGrid({
   
   const gridRef = useRef<HTMLDivElement>(null)
   
-  const selectableRooms = rooms.filter(room => room.status === "free" || room.status === "housekeeping")
+  // Filter checked-in guests only
+  const checkedInGuests = guests.filter(g => g.status === "checked-in")
   
+  // Sort rooms
   const sortedRooms = [...rooms].sort((a, b) => {
     const numA = Number(a.name.replace(/\D/g, ""))
     const numB = Number(b.name.replace(/\D/g, ""))
     return numA - numB
   })
+
+  // Helper function to get room status - SIMPLIFIED VERSION
+  const getRoomStatus = (room: Room): string => {
+    // Use the status already calculated in BookingsPage
+    return room.status || "free"
+  }
+
+  // Get selectable rooms (free only)
+  const selectableRooms = sortedRooms.filter(room => getRoomStatus(room) === "free")
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (!(e.target as HTMLElement).closest('.room-card')) {
@@ -172,8 +190,10 @@ export default function RoomGrid({
   }
 
   const handleRoomClick = (room: Room, e: React.MouseEvent) => {
-    // Don't prevent click for maintenance rooms - they can be toggled
-    if (room.status === "occupied") {
+    const roomStatus = getRoomStatus(room)
+    
+    // Only allow clicking on free rooms
+    if (roomStatus !== "free") {
       return
     }
 
@@ -201,37 +221,55 @@ export default function RoomGrid({
     const room = rooms.find(r => r.id === roomId)
     if (!room) return
     
-    if (room.status === "maintenance") {
-      // Change from maintenance to free (or housekeeping based on your logic)
+    const currentStatus = getRoomStatus(room)
+    
+    if (currentStatus === "maintenance") {
+      // Change from maintenance to free
       onStatusChange(roomId, "free")
     } else {
-      // Change to maintenance
-      onStatusChange(roomId, "maintenance")
+      // Change to maintenance (only if room is free)
+      if (currentStatus === "free") {
+        onStatusChange(roomId, "maintenance")
+      }
     }
     setShowMaintenanceMenu(null)
   }
 
   const getStatusLabel = (room: Room) => {
-    if (room.status === "housekeeping") {
+    const status = getRoomStatus(room)
+    
+    if (status === "housekeeping") {
       return "V&D"
-    } else if (room.status === "free") {
+    } else if (status === "free") {
       return "V&C"
-    } else if (room.status === "maintenance") {
+    } else if (status === "maintenance") {
       return "OOO"
+    } else if (status === "occupied") {
+      return "OCC"
     }
-    return "OCC"
+    return "V&C"
   }
 
   const getStatusDescription = (room: Room) => {
-    if (room.status === "housekeeping") {
+    const status = getRoomStatus(room)
+    
+    if (status === "housekeeping") {
       return "Vacant & Dirty"
-    } else if (room.status === "free") {
+    } else if (status === "free") {
       return "Vacant & Clean"
-    } else if (room.status === "maintenance") {
+    } else if (status === "maintenance") {
       return "Out of Order"
+    } else if (status === "occupied") {
+      return "Occupied"
     }
-    return "Occupied"
+    return "Vacant & Clean"
   }
+
+  // Calculate stats for debug
+  const freeRooms = rooms.filter(r => getRoomStatus(r) === "free").length
+  const occupiedRooms = rooms.filter(r => getRoomStatus(r) === "occupied").length
+  const maintenanceRooms = rooms.filter(r => getRoomStatus(r) === "maintenance").length
+  const housekeepingRooms = rooms.filter(r => getRoomStatus(r) === "housekeeping").length
 
   return (
     <div className="space-y-4">
@@ -267,22 +305,47 @@ export default function RoomGrid({
         </div>
       </div>
 
-      {/* Instructions */}
+      {/* Debug Info - Updated */}
       <div className="text-sm text-blue-600 bg-blue-50 p-3 rounded-lg border border-blue-200">
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex items-center gap-1">
-            <span className="font-semibold">Left Click:</span>
-            <span>Select room</span>
+            <span className="font-semibold">Free Rooms:</span>
+            <span>{freeRooms}</span>
           </div>
           <div className="h-4 w-px bg-blue-300"></div>
+          <div className="flex items-center gap-1">
+            <span className="font-semibold">Occupied:</span>
+            <span>{occupiedRooms}</span>
+          </div>
+          <div className="h-4 w-px bg-blue-300"></div>
+          <div className="flex items-center gap-1">
+            <span className="font-semibold">Housekeeping:</span>
+            <span>{housekeepingRooms}</span>
+          </div>
+          <div className="h-4 w-px bg-blue-300"></div>
+          <div className="flex items-center gap-1">
+            <span className="font-semibold">Maintenance:</span>
+            <span>{maintenanceRooms}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Instructions */}
+      <div className="text-sm text-amber-600 bg-amber-50 p-3 rounded-lg border border-amber-200">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-1">
+            <span className="font-semibold">Left Click:</span>
+            <span>Select free rooms</span>
+          </div>
+          <div className="h-4 w-px bg-amber-300"></div>
           <div className="flex items-center gap-1">
             <span className="font-semibold">Right Click:</span>
             <span>Toggle maintenance mode</span>
           </div>
-          <div className="h-4 w-px bg-blue-300"></div>
+          <div className="h-4 w-px bg-amber-300"></div>
           <div className="flex items-center gap-1">
             <span className="font-semibold">Drag:</span>
-            <span>Select multiple rooms</span>
+            <span>Select multiple free rooms</span>
           </div>
         </div>
       </div>
@@ -312,9 +375,11 @@ export default function RoomGrid({
         {/* Room Grid */}
         <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-7 xl:grid-cols-8 gap-3">
           {sortedRooms.map((room) => {
+            const roomStatus = getRoomStatus(room)
             const isSelected = selectedRooms.some((r) => r.id === room.id)
-            const config = statusConfig[room.status]
-            const canSelect = room.status === "free" || room.status === "housekeeping" || room.status === "maintenance"
+            const config = statusConfig[roomStatus] ?? statusConfig.free
+
+            const canSelect = roomStatus === "free"
             const statusLabel = getStatusLabel(room)
             const statusDescription = getStatusDescription(room)
 
@@ -345,7 +410,7 @@ export default function RoomGrid({
                       {room.name}
                     </div>
                     {/* Occupied Indicator */}
-                    {room.status === "occupied" && (
+                    {roomStatus === "occupied" && (
                       <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>
                     )}
                   </div>
@@ -411,21 +476,29 @@ export default function RoomGrid({
                             onClick={() => toggleMaintenance(room.id)}
                             className={cn(
                               "w-full text-left px-3 py-2 rounded text-sm font-medium transition-colors",
-                              room.status === "maintenance"
+                              roomStatus === "maintenance"
                                 ? "bg-green-100 text-green-800 hover:bg-green-200"
                                 : "bg-amber-100 text-amber-800 hover:bg-amber-200"
                             )}
                           >
-                            {room.status === "maintenance"
+                            {roomStatus === "maintenance"
                               ? "✓ Mark as Ready (V&C)"
                               : "✗ Mark as Out of Order (OOO)"}
                           </button>
-                          {room.status === "occupied" && (
+                          {roomStatus === "occupied" && (
                             <button
                               disabled
                               className="w-full text-left px-3 py-2 rounded text-sm font-medium bg-slate-100 text-slate-400 cursor-not-allowed"
                             >
                               Cannot modify occupied room
+                            </button>
+                          )}
+                          {roomStatus === "housekeeping" && (
+                            <button
+                              disabled
+                              className="w-full text-left px-3 py-2 rounded text-sm font-medium bg-slate-100 text-slate-400 cursor-not-allowed"
+                            >
+                              Clean room first to modify status
                             </button>
                           )}
                         </div>

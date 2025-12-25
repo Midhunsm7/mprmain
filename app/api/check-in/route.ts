@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
+// Generate a random 4-digit PIN
+const generateRoomPin = () => {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+};
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -19,32 +24,45 @@ export async function POST(req: NextRequest) {
       guestCategory = "walk-in",
       purposeOfVisit = "leisure",
       advanceAmount = 0,
-      bookingType = "daily", // "daily" or "hourly"
-      hours = 0, // For freshen-up bookings
+      bookingType = "daily",
+      hours = 0,
       manualPrice,
-      totalAmount, // Total amount from frontend
+      totalAmount,
+      calculatedTotal // Added this from frontend
     } = body;
+
+    // Validate required fields
+    if (!name || !phone || !room_id) {
+      return NextResponse.json(
+        { error: "Name, phone, and room are required" },
+        { status: 400 }
+      );
+    }
 
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
+    // Generate a room PIN
+    const roomPin = generateRoomPin();
+
     const checkIn = new Date();
     const checkOut = new Date();
     
     // Calculate checkout based on booking type
-    if (bookingType === "hourly") {
-      // Freshen up - add hours instead of days
+    if (bookingType === "hourly" || guestCategory === "freshen-up") {
       checkOut.setHours(checkOut.getHours() + Number(hours));
     } else {
-      // Regular booking - add days
       checkOut.setDate(checkOut.getDate() + Number(days));
     }
 
+    // Use manual price if provided, otherwise use calculated total
+    const finalTotal = manualPrice ? Number(manualPrice) : totalAmount;
+    
     // Validate advance amount
     const validAdvanceAmount = Math.max(0, Number(advanceAmount) || 0);
-    if (validAdvanceAmount > totalAmount) {
+    if (validAdvanceAmount > finalTotal) {
       return NextResponse.json(
         { error: "Advance amount cannot exceed total amount" },
         { status: 400 }
@@ -52,7 +70,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Calculate balance
-    const balanceAmount = totalAmount - validAdvanceAmount;
+    const balanceAmount = finalTotal - validAdvanceAmount;
 
     // 1️⃣ Find / create guest
     const { data: existingGuests } = await supabase
@@ -62,26 +80,35 @@ export async function POST(req: NextRequest) {
       .limit(1);
 
     let guestId: string;
-const guestData = {
-  name,
-  address,
-  id_proof: idProof,
-  pax,
-  status: "checked-in",
-  check_in: checkIn,
-  check_out: checkOut,
-  room_ids: [room_id],
-  meal_plan: mealPlan,
-  meal_plan_charge: mealPlanCharge,
-  gstin: gstin || null,
-  company_name: companyName || null,
-  guest_category: guestCategory,
-  purpose_of_visit: purposeOfVisit,
-  booked_days: bookingType === "hourly" ? 0 : days,
-  extra_hours: bookingType === "hourly" ? hours : 0,
-  advance_payment: validAdvanceAmount, // ✅ ADD THIS LINE
-  base_amount: manualPrice ? parseFloat(manualPrice) : null, // ✅ ADD THIS LINE FOR MANUAL PRICE
-};
+    
+    // Determine if this is a complimentary booking
+    const isComplimentary = guestCategory === "complimentary";
+    // For complimentary, set base amount to 0
+    const baseAmount = isComplimentary ? 0 : (manualPrice ? Number(manualPrice) : calculatedTotal);
+
+    const guestData = {
+      name,
+      address,
+      id_proof: idProof,
+      pax,
+      status: "checked-in",
+      check_in: checkIn.toISOString(),
+      check_out: checkOut.toISOString(),
+      room_ids: [room_id],
+      meal_plan: mealPlan,
+      meal_plan_charge: mealPlanCharge,
+      gstin: gstin || null,
+      company_name: companyName || null,
+      guest_category: guestCategory,
+      purpose_of_visit: purposeOfVisit,
+      booked_days: (bookingType === "hourly" || guestCategory === "freshen-up") ? 0 : days,
+      extra_hours: (bookingType === "hourly" || guestCategory === "freshen-up") ? hours : 0,
+      advance_payment: validAdvanceAmount,
+      base_amount: baseAmount,
+      room_pin: roomPin,
+      pin_code: roomPin,
+      manual_price_override: manualPrice ? Number(manualPrice) : null,
+    };
 
     if (existingGuests && existingGuests.length > 0) {
       guestId = existingGuests[0].id;
@@ -120,9 +147,9 @@ const guestData = {
         check_in: checkIn.toISOString().slice(0, 10),
         check_out: checkOut.toISOString().slice(0, 10),
         status: "checked-in",
-        booking_type: bookingType === "hourly" ? "freshen-up" : "regular",
-        base_amount: totalAmount,
-        total: totalAmount,
+        booking_type: (bookingType === "hourly" || guestCategory === "freshen-up") ? "freshen-up" : "regular",
+        base_amount: baseAmount,
+        total: finalTotal,
         advance_amount: validAdvanceAmount,
       })
       .select()
@@ -139,15 +166,15 @@ const guestData = {
     await supabase.from("accounts").insert({
       guest_id: guestId,
       room_id,
-      base_amount: totalAmount,
-      total_amount: totalAmount,
+      base_amount: baseAmount,
+      total_amount: finalTotal,
       advance_amount: validAdvanceAmount,
-      balance_paid: 0, // No additional payment yet
+      balance_paid: 0,
       category: "room",
       restaurant_charges: 0,
       discount_amount: 0,
       damage_charges: 0,
-      extra_hours: bookingType === "hourly" ? hours : 0,
+      extra_hours: (bookingType === "hourly" || guestCategory === "freshen-up") ? hours : 0,
       extra_charge: 0,
       payment_method: validAdvanceAmount > 0 ? "advance_received" : null,
       payment_details: validAdvanceAmount > 0 ? {
@@ -167,7 +194,7 @@ const guestData = {
         method: "advance",
         payment_mode: "advance_at_checkin",
         status: "completed",
-        cash_register: true, // Track in cash register
+        cash_register: true,
       });
 
       // Update cash register
@@ -200,7 +227,7 @@ const guestData = {
         account: "Advance Payments",
         type: "Credit",
         amount: validAdvanceAmount,
-        note: `Advance payment from ${name} (Phone: ${phone}) for ${bookingType === "hourly" ? "freshen-up" : "room"} booking`,
+        note: `Advance payment from ${name} (Phone: ${phone}) for ${(bookingType === "hourly" || guestCategory === "freshen-up") ? "freshen-up" : "room"} booking`,
         source: {
           type: "advance_payment",
           booking_id: booking.id,
@@ -230,12 +257,13 @@ const guestData = {
         hours: hours || null,
         days: days || null,
         guest_category: guestCategory,
-        total_amount: totalAmount,
+        total_amount: finalTotal,
         advance_amount: validAdvanceAmount,
         balance_due: balanceAmount,
         meal_plan: mealPlan !== "none" ? mealPlan : null,
         check_in: checkIn.toISOString(),
         check_out: checkOut.toISOString(),
+        room_pin: roomPin,
       },
     });
 
@@ -243,14 +271,16 @@ const guestData = {
       success: true,
       booking_id: booking.id,
       guest_id: guestId,
-      total_amount: totalAmount,
+      total_amount: finalTotal,
       advance_paid: validAdvanceAmount,
       balance_due: balanceAmount,
       booking_type: bookingType,
       check_out_time: checkOut.toISOString(),
+      room_pin: roomPin,
+      purpose_of_visit: purposeOfVisit,
       message: validAdvanceAmount > 0 
         ? `Check-in successful! Advance ₹${validAdvanceAmount} received. Balance due: ₹${balanceAmount}`
-        : `Check-in successful! Total amount: ₹${totalAmount}`,
+        : `Check-in successful! Total amount: ₹${finalTotal}`,
     });
 
   } catch (err: any) {

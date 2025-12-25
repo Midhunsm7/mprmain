@@ -7,7 +7,7 @@ import { subscribeToTable } from "@/lib/supabaseRealtime";
 import OrderList from "./components/OrderList";
 import AddItemModal from "./components/AddItemModal";
 import PinAssignModal from "./components/PinAssignModal";
-import NcModal from "./components/NcModal"; // New import
+import NcModal from "./components/NcModal";
 import TableTile from "./components/TableTile";
 import { 
   Plus, 
@@ -17,19 +17,13 @@ import {
   XCircle, 
   UtensilsCrossed,
   Receipt,
-  CheckCircle,
   Clock,
   Table2,
   Package,
   Hotel,
-  Users,
   Shield,
-  TrendingDown,
   ChefHat,
-  DollarSign,
-  Filter,
-  Search,
-  Download,
+  TrendingDown,
   AlertCircle
 } from "lucide-react";
 import { motion } from "framer-motion";
@@ -72,21 +66,17 @@ export default function KotPage() {
     todayNcCount: 0
   });
 
-  // ------------------------------------------------------------
-  // LOAD ORDERS
-  // ------------------------------------------------------------
   async function loadOrders() {
     setLoading(true);
     const { data, error } = await supabase
       .from("kot_orders")
       .select("*")
-      .in("status", ["open"])
+      .in("status", ["open", "room_billed"])
       .order("created_at", { ascending: false });
 
     if (error) console.error("Load Orders Error:", error);
     setOrders(data || []);
     
-    // Load NC stats
     await loadNcStats();
     setLoading(false);
   }
@@ -94,7 +84,6 @@ export default function KotPage() {
   async function loadNcStats() {
     const today = new Date().toISOString().split('T')[0];
     
-    // Get today's NC orders
     const { data: ncData } = await supabase
       .from("kot_orders")
       .select("*, kot_items(*)")
@@ -109,7 +98,6 @@ export default function KotPage() {
       return sum + orderTotal;
     }, 0);
     
-    // Get all NC orders count
     const { count: totalNcCount } = await supabase
       .from("kot_orders")
       .select("*", { count: 'exact', head: true })
@@ -122,9 +110,6 @@ export default function KotPage() {
     });
   }
 
-  // ------------------------------------------------------------
-  // REALTIME LISTENER
-  // ------------------------------------------------------------
   useEffect(() => {
     loadOrders();
     const unsub = subscribeToTable("kot_orders", "ALL", () => {
@@ -133,9 +118,6 @@ export default function KotPage() {
     return () => unsub();
   }, []);
 
-  // ------------------------------------------------------------
-  // CREATE TAKEAWAY ORDER
-  // ------------------------------------------------------------
   async function createOrder() {
     const res = await fetch("/api/kot/create", {
       method: "POST",
@@ -152,9 +134,6 @@ export default function KotPage() {
     setItemsRefreshKey((k) => k + 1);
   }
 
-  // ------------------------------------------------------------
-  // FIND ORDER FOR TABLE
-  // ------------------------------------------------------------
   function getOrderForTable(tableNumber: number) {
     const label = `T${tableNumber}`;
     return (
@@ -164,9 +143,6 @@ export default function KotPage() {
     );
   }
 
-  // ------------------------------------------------------------
-  // TABLE CLICK HANDLER
-  // ------------------------------------------------------------
   async function handleTableClick(tableNumber: number) {
     const existing = getOrderForTable(tableNumber);
 
@@ -191,62 +167,93 @@ export default function KotPage() {
     setItemsRefreshKey((k) => k + 1);
   }
 
-  // ------------------------------------------------------------
-  // PRINT KOT
-  // ------------------------------------------------------------
   async function printKOT() {
     if (!activeOrder) return;
 
-    const res = await fetch("/api/kot/print-ticket", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ order_id: activeOrder.id }),
-    });
+    try {
+      const res = await fetch("/api/kot/print-ticket", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ order_id: activeOrder.id }),
+      });
 
-    const data = await res.json();
-    if (!res.ok) return alert("Failed to print KOT");
+      const data = await res.json();
+      if (!res.ok) {
+        alert("Failed to generate KOT");
+        return;
+      }
 
-    const w = window.open("", "KOT Ticket", "width=400,height=600");
-    w!.document.write(data.html);
-    w!.document.close();
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'absolute';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = 'none';
+      document.body.appendChild(iframe);
+
+      const iframeDoc = iframe.contentWindow?.document;
+      if (!iframeDoc) {
+        alert("Unable to print");
+        document.body.removeChild(iframe);
+        return;
+      }
+
+      iframeDoc.open();
+      iframeDoc.write(data.html);
+      iframeDoc.close();
+
+      iframe.onload = () => {
+        setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+            
+            setTimeout(() => {
+              if (document.body.contains(iframe)) {
+                document.body.removeChild(iframe);
+              }
+            }, 1000);
+          } catch (printErr) {
+            console.error("Print error:", printErr);
+            if (document.body.contains(iframe)) {
+              document.body.removeChild(iframe);
+            }
+          }
+        }, 100);
+      };
+
+      iframe.onerror = () => {
+        alert("Error loading print content");
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+      };
+
+    } catch (err) {
+      console.error("Print KOT error:", err);
+      alert("Failed to print KOT");
+    }
   }
 
-  // ------------------------------------------------------------
-  // MARK AS NON-CHARGEABLE
-  // ------------------------------------------------------------
-const handleMarkAsNc = async () => {
-  if (!activeOrder) return;
-  
-  // Get order items
-  const { data: items } = await supabase
-    .from("kot_items")
-    .select("*")
-    .eq("order_id", activeOrder.id);
-  
-  if (!items || items.length === 0) {
-    alert("Please add items to the order before marking as NC");
-    setShowAddItem(true);
-    return;
-  }
-  
-  // Calculate total
-  const total = items.reduce(
-    (sum, it) => sum + (it.total || it.quantity * it.price),
-    0
-  );
-  
-  setShowNcModal(true);
-  // Store the items and total for the modal
-  // You might want to use a state or ref for this
-};
+  const handleMarkAsNc = async () => {
+    if (!activeOrder) return;
+    
+    const { data: items } = await supabase
+      .from("kot_items")
+      .select("*")
+      .eq("order_id", activeOrder.id);
+    
+    if (!items || items.length === 0) {
+      alert("Please add items to the order before marking as NC");
+      setShowAddItem(true);
+      return;
+    }
+    
+    setShowNcModal(true);
+  };
 
-  // ------------------------------------------------------------
-  // CLOSE ORDER
-  // ------------------------------------------------------------
   async function closeOrder() {
     if (!activeOrder) return;
     
-    // If order is already NC
     if (activeOrder.billing_type === 'nc') {
       if (!confirm("This is a Non-Chargeable order. Mark as completed?")) return;
       
@@ -268,7 +275,6 @@ const handleMarkAsNc = async () => {
       return;
     }
     
-    // If order is billed to room
     if (activeOrder.billed_to_room || activeOrder.status === "room_billed") {
       if (!confirm("This order is billed to a room. Mark as completed?")) return;
       
@@ -290,7 +296,6 @@ const handleMarkAsNc = async () => {
       return;
     }
 
-    // For regular orders, show bill summary
     if (!confirm("Close this order & generate bill?")) return;
 
     const res = await fetch("/api/kot/close", {
@@ -310,12 +315,8 @@ const handleMarkAsNc = async () => {
     setActiveOrder(null);
   }
 
-  // ------------------------------------------------------------
-  // UI RENDER
-  // ------------------------------------------------------------
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-4 md:p-6">
-      {/* HEADER */}
       <motion.div 
         initial={{ y: -20, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}
@@ -357,9 +358,7 @@ const handleMarkAsNc = async () => {
           </div>
         </div>
 
-        {/* ENHANCED STATS BAR WITH NC */}
         <div className="grid grid-cols-2 md:grid-cols-6 gap-4 mb-8">
-          {/* Active Tables */}
           <motion.div 
             whileHover={{ y: -2 }}
             className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
@@ -375,7 +374,6 @@ const handleMarkAsNc = async () => {
             </div>
           </motion.div>
           
-          {/* Takeaway Orders */}
           <motion.div 
             whileHover={{ y: -2 }}
             className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
@@ -391,7 +389,6 @@ const handleMarkAsNc = async () => {
             </div>
           </motion.div>
           
-          {/* Room Billed */}
           <motion.div 
             whileHover={{ y: -2 }}
             className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
@@ -407,7 +404,6 @@ const handleMarkAsNc = async () => {
             </div>
           </motion.div>
           
-          {/* Total Orders */}
           <motion.div 
             whileHover={{ y: -2 }}
             className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
@@ -421,19 +417,44 @@ const handleMarkAsNc = async () => {
             </div>
           </motion.div>
           
-          {/* NC Orders Today */}
-         
+          <motion.div 
+            whileHover={{ y: -2 }}
+            className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 font-medium">NC Orders Today</p>
+                <p className="text-2xl font-bold text-amber-600 mt-1">
+                  {stats.todayNcCount}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  ₹{stats.staffMealsValue.toLocaleString()}
+                </p>
+              </div>
+              <ChefHat className="h-10 w-10 text-amber-500 opacity-80" />
+            </div>
+          </motion.div>
           
-          {/* Staff Meals Value */}
-         
+          <motion.div 
+            whileHover={{ y: -2 }}
+            className="bg-white rounded-2xl p-5 shadow-sm border border-gray-200"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-gray-500 font-medium">Total NC Orders</p>
+                <p className="text-2xl font-bold text-rose-600 mt-1">
+                  {stats.ncOrders}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">All time</p>
+              </div>
+              <TrendingDown className="h-10 w-10 text-rose-500 opacity-80" />
+            </div>
+          </motion.div>
         </div>
       </motion.div>
 
-      {/* MAIN CONTENT GRID */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* LEFT COLUMN - TABLE LAYOUT */}
         <div className="lg:col-span-2 space-y-6">
-          {/* TABLE GRID SECTION */}
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -487,7 +508,6 @@ const handleMarkAsNc = async () => {
             </div>
           </motion.div>
 
-          {/* ORDER DETAILS SECTION */}
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -514,7 +534,6 @@ const handleMarkAsNc = async () => {
                 </div>
               ) : (
                 <div className="space-y-5">
-                  {/* ORDER HEADER WITH NC BADGE */}
                   <div className={`flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 rounded-xl border ${
                     activeOrder.billing_type === 'nc' 
                       ? 'bg-gradient-to-r from-amber-50 to-orange-50 border-amber-200' 
@@ -535,7 +554,6 @@ const handleMarkAsNc = async () => {
                               Order #{activeOrder.id.slice(0, 8).toUpperCase()}
                             </span>
                             
-                            {/* NC BADGE */}
                             {activeOrder.billing_type === 'nc' && (
                               <span className="px-3 py-1 bg-gradient-to-r from-amber-500 to-orange-600 text-white text-xs font-medium rounded-full shadow-sm">
                                 Non-Chargeable
@@ -572,7 +590,6 @@ const handleMarkAsNc = async () => {
                       </div>
                     </div>
 
-                    {/* ACTION BUTTONS */}
                     <div className="flex flex-wrap gap-2">
                       {activeOrder.status !== "room_billed" && activeOrder.billing_type !== 'nc' && (
                         <>
@@ -592,7 +609,6 @@ const handleMarkAsNc = async () => {
                             Print KOT
                           </button>
 
-                          {/* NC BUTTON */}
                           <button
                             onClick={handleMarkAsNc}
                             className="flex items-center gap-2 bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-600 hover:to-pink-700 text-white px-4 py-2 rounded-lg shadow-md hover:shadow transition-all duration-200 text-sm font-medium"
@@ -634,7 +650,6 @@ const handleMarkAsNc = async () => {
                     </div>
                   </div>
 
-                  {/* ITEMS LIST */}
                   <OrderItemsView
                     orderId={activeOrder.id}
                     refreshKey={itemsRefreshKey}
@@ -646,7 +661,6 @@ const handleMarkAsNc = async () => {
           </motion.div>
         </div>
 
-        {/* RIGHT COLUMN - TODAY'S ORDERS */}
         <motion.div 
           initial={{ opacity: 0, x: 20 }}
           animate={{ opacity: 1, x: 0 }}
@@ -677,12 +691,10 @@ const handleMarkAsNc = async () => {
                 }}
               />
             </div>
-            
           </div>
         </motion.div>
       </div>
 
-      {/* MODALS */}
       {showAddItem && activeOrder && activeOrder.status !== "room_billed" && activeOrder.billing_type !== 'nc' && (
         <AddItemModal
           orderId={activeOrder.id}
@@ -709,23 +721,22 @@ const handleMarkAsNc = async () => {
         />
       )}
 
-{showNcModal && activeOrder && (
-  <NcModal
-    orderId={activeOrder.id}
-    onClose={async (success) => {
-      setShowNcModal(false);
-      if (success) {
-        await loadOrders();
-        setActiveOrder(null);
-      }
-    }}
-  />
-)}
+      {showNcModal && activeOrder && (
+        <NcModal
+          orderId={activeOrder.id}
+          onClose={async (success) => {
+            setShowNcModal(false);
+            if (success) {
+              await loadOrders();
+              setActiveOrder(null);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }
 
-/* ---------------- ORDER ITEMS VIEW ---------------- */
 function OrderItemsView({
   orderId,
   refreshKey,
@@ -749,7 +760,6 @@ function OrderItemsView({
 
     setItems(data || []);
     
-    // Calculate total
     const total = (data || []).reduce(
       (sum, it) => sum + Number(it.total ?? it.quantity * it.price),
       0
@@ -792,7 +802,6 @@ function OrderItemsView({
 
   return (
     <div className="space-y-4">
-      {/* ITEMS SUMMARY */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex flex-wrap gap-2">
           <span className="px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full font-medium">
@@ -819,7 +828,6 @@ function OrderItemsView({
         </div>
       </div>
 
-      {/* ITEMS TABLE */}
       <div className="overflow-hidden rounded-xl border border-gray-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -884,7 +892,6 @@ function OrderItemsView({
               ))}
             </tbody>
             
-            {/* TOTALS ROW */}
             <tfoot className={isNcOrder ? 'bg-gradient-to-r from-amber-50 to-orange-50' : 'bg-gradient-to-r from-gray-50 to-gray-100'}>
               <tr>
                 <td colSpan={3} className="px-6 py-4 text-right font-semibold text-gray-700">

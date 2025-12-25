@@ -1,10 +1,6 @@
-    /* File: app/kot/components/PrintKOTButton.tsx
-   Client component: triggers fetching printable HTML and opens print window (browser),
-   and optionally obtains ESC/POS base64 to forward to a printer gateway.
-   Behavior:
-   - When user clicks, fetch /api/kot/print?order_id=... -> returns { html, escpos_base64 }
-   - Opens a new window and writes `html` into it, then calls print() (user will see print dialog).
-   - Also exposes escpos_base64 in console for gateway forwarding.
+/* File: app/kot/components/PrintKOTButton.tsx
+   Client component: triggers fetching printable HTML and prints directly
+   using a hidden iframe approach for seamless printing.
 */
 
 "use client";
@@ -25,27 +21,46 @@ export default function PrintKOTButton({ orderId }: { orderId: string }) {
       const data = await res.json();
       const { html, escpos_base64 } = data;
 
-      // Open print window and print
-      const w = window.open("", "_blank", "width=600,height=800");
-      if (!w) {
-        alert("Popup blocked. Allow popups for this site to print.");
-        setLoading(false);
-        return;
+      // Create hidden iframe for printing
+      const iframe = document.createElement('iframe');
+      iframe.style.position = 'absolute';
+      iframe.style.width = '0';
+      iframe.style.height = '0';
+      iframe.style.border = 'none';
+      document.body.appendChild(iframe);
+
+      // Write content to iframe
+      const iframeDoc = iframe.contentWindow?.document;
+      if (!iframeDoc) {
+        throw new Error("Unable to access iframe document");
       }
-      w.document.open();
-      w.document.write(html);
-      w.document.close();
-      // wait a tick for content to render
-      setTimeout(() => {
-        w.focus();
-        w.print();
-      }, 500);
+
+      iframeDoc.open();
+      iframeDoc.write(html);
+      iframeDoc.close();
+
+      // Wait for content to load, then print
+      iframe.onload = () => {
+        setTimeout(() => {
+          try {
+            iframe.contentWindow?.focus();
+            iframe.contentWindow?.print();
+            
+            // Remove iframe after print dialog closes (or after delay)
+            setTimeout(() => {
+              document.body.removeChild(iframe);
+            }, 1000);
+          } catch (printErr) {
+            console.error("Print error:", printErr);
+            document.body.removeChild(iframe);
+          }
+        }, 100);
+      };
 
       // Log escpos payload for gateway forwarding
-      console.log("ESC/POS base64 payload (forward to printer gateway):", escpos_base64);
+      console.log("ESC/POS base64 payload:", escpos_base64);
 
-      // Optionally, if you have a networked printer gateway, you could POST escpos_base64 to it here.
-      // Example (commented):
+      // Optional: Forward to networked thermal printer gateway
       // await fetch("http://printer-gateway.local/print", {
       //   method: "POST",
       //   headers: { "Content-Type": "application/json" },

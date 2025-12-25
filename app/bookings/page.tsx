@@ -56,6 +56,7 @@ interface RawGuest {
   total_charge?: number;
   room_pin?: string; // PIN field from database
   pin_code?: string; // Alternative PIN field
+  purpose_of_visit?: string;
 }
 
 export interface Guest {
@@ -71,9 +72,8 @@ export interface Guest {
   extraCharge?: number;
   totalCharge?: number;
   roomPin?: string;
-  purposeOfVisit?: string; // ADD THIS
+  purposeOfVisit?: string;
 }
-
 
 /* =========================================== */
 
@@ -95,7 +95,9 @@ export default function BookingsPage() {
   /* ===================================================== */
 
   const fetchRooms = async () => {
-    const { data, error } = await supabase.from("rooms").select(`
+    setIsLoading(true);
+    try {
+      const { data, error } = await supabase.from("rooms").select(`
         id, 
         room_number, 
         status, 
@@ -103,18 +105,24 @@ export default function BookingsPage() {
         room_types(name, base_price)
       `);
 
-    if (error || !data) {
-      console.error("Room fetch error:", error);
-      return;
-    }
+      if (error) {
+        console.error("Room fetch error:", error);
+        setRooms([]);
+        return;
+      }
 
-    // We'll fetch guests first to get PINs, then map rooms with PINs
-    await fetchGuests();
+      await fetchGuests(data || []);
+    } catch (error) {
+      console.error("Error fetching rooms:", error);
+      setRooms([]);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleStatusChange = async (
     roomId: string,
-    newStatus: Room["status"]
+    newStatus: string
   ) => {
     try {
       const { error } = await supabase
@@ -144,74 +152,96 @@ export default function BookingsPage() {
   /* ================= FETCH GUESTS ===================== */
   /* ===================================================== */
 
-  const fetchGuests = async () => {
-    const { data: guestsData, error: guestsError } = await supabase
-      .from("guests")
-      .select("*")
-      .order("created_at", { ascending: false });
+  const fetchGuests = async (roomsData: RawRoom[] = []) => {
+    try {
+      const { data: guestsData, error: guestsError } = await supabase
+        .from("guests")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    if (guestsError) {
-      console.error("Guest fetch error:", guestsError);
-      return;
+      if (guestsError) {
+        console.error("Guest fetch error:", guestsError);
+        return;
+      }
+
+      // Map guests with PINs
+      const mappedGuests: Guest[] = (guestsData || []).map((g: RawGuest) => ({
+        id: g.id,
+        name: g.name,
+        roomIds: g.room_ids || [],
+        checkInISO: g.check_in,
+        bookedDays: g.booked_days,
+        baseAmount: g.base_amount,
+        status: g.status,
+        checkOutISO: g.check_out,
+        extraHours: g.extra_hours,
+        extraCharge: g.extra_charge,
+        totalCharge: g.total_charge,
+        roomPin: g.room_pin || g.pin_code || undefined,
+        purposeOfVisit: g.purpose_of_visit || "leisure",
+      }));
+
+      setGuests(mappedGuests);
+
+      // Get checked-in guests for occupancy check
+      const checkedInGuests = mappedGuests.filter(g => g.status === "checked-in");
+      
+      // Map rooms with proper status determination
+      const mappedRooms: Room[] = (roomsData || []).map((r: RawRoom) => {
+        // Clean up status string
+        const rawStatus = (r.status || "").toLowerCase().trim();
+        
+        // Check if room is occupied by a checked-in guest
+        const isOccupied = checkedInGuests.some(g => 
+          g.roomIds?.includes(r.id) || r.current_guest_id === g.id
+        );
+        
+        // Determine actual status
+        let roomStatus: Room["status"];
+        
+        if (isOccupied) {
+          roomStatus = "occupied";
+        } else if (rawStatus.includes("maintenance") || rawStatus.includes("ooo")) {
+          roomStatus = "maintenance";
+        } else if (rawStatus.includes("housekeeping") || rawStatus.includes("dirty") || rawStatus.includes("v&d")) {
+          roomStatus = "housekeeping";
+        } else if (rawStatus.includes("free") || rawStatus.includes("available") || rawStatus.includes("v&c")) {
+          roomStatus = "free";
+        } else if (rawStatus.includes("occupied") || rawStatus.includes("occ")) {
+          roomStatus = "occupied";
+        } else {
+          // Default to free if we can't determine
+          roomStatus = "free";
+        }
+        
+        // Find guest for PIN if room is occupied
+        const guest = isOccupied ? checkedInGuests.find(g => 
+          g.roomIds?.includes(r.id) || r.current_guest_id === g.id
+        ) : null;
+
+        return {
+          id: r.id,
+          name: r.room_number,
+          category: r.room_types?.name ?? "Deluxe",
+          status: roomStatus,
+          pricePerDay: r.room_types?.base_price ?? 2800,
+          guestId: guest?.id || null,
+          pin: guest?.roomPin || null,
+          current_guest_id: r.current_guest_id,
+        };
+      });
+
+      console.log("Mapped rooms:", mappedRooms.map(r => ({
+        name: r.name,
+        status: r.status,
+        guestId: r.guestId
+      })));
+
+      setRooms(mappedRooms);
+    } catch (error) {
+      console.error("Error fetching guests:", error);
+      setGuests([]);
     }
-
-    // Fetch rooms again to get updated guest IDs
-    const { data: roomsData, error: roomsError } = await supabase.from("rooms")
-      .select(`
-        id, 
-        room_number, 
-        status, 
-        current_guest_id,
-        room_types(name, base_price)
-      `);
-
-    if (roomsError) {
-      console.error("Room fetch error:", roomsError);
-      return;
-    }
-
-    // Map guests with PINs
-// Map guests with PINs
-const mappedGuests: Guest[] = (guestsData || []).map((g: RawGuest) => ({
-  id: g.id,
-  name: g.name,
-  roomIds: g.room_ids || [],
-  checkInISO: g.check_in,
-  bookedDays: g.booked_days,
-  baseAmount: g.base_amount,
-  status: g.status,
-  checkOutISO: g.check_out,
-  extraHours: g.extra_hours,
-  extraCharge: g.extra_charge,
-  totalCharge: g.total_charge,
-  roomPin: g.room_pin || g.pin_code || undefined,
-  purposeOfVisit: g.purpose_of_visit || "leisure", // ADD THIS
-}));
-
-    setGuests(mappedGuests);
-
-    // Map rooms with guest PINs
-    const mappedRooms: Room[] = (roomsData || []).map((r: RawRoom) => {
-      // Find guest occupying this room
-      const guest = mappedGuests.find(
-        (g) =>
-          g.status === "checked-in" &&
-          (g.roomIds?.includes(r.id) || r.current_guest_id === g.id)
-      );
-
-      return {
-        id: r.id,
-        name: r.room_number,
-        category: r.room_types?.name ?? "Deluxe",
-        status: r.status === "available" ? "free" : r.status,
-        pricePerDay: r.room_types?.base_price ?? 2800,
-        guestId: guest?.id || null,
-        pin: guest?.roomPin || null,
-      };
-    });
-
-    setRooms(mappedRooms);
-    setIsLoading(false);
   };
 
   useEffect(() => {
@@ -237,17 +267,11 @@ const mappedGuests: Guest[] = (guestsData || []).map((g: RawGuest) => ({
     }
   };
 
-  const generateRandomPin = () => {
-    return Math.floor(1000 + Math.random() * 9000).toString();
-  };
-
   /* ===================== CALCULATIONS ===================== */
 
   const calculateTotal = () => {
-    return selectedRooms.reduce((sum, r) => sum + r.pricePerDay, 0) * days;
+    return selectedRooms.reduce((sum, r) => sum + (r.pricePerDay || 0), 0) * days;
   };
-
-  // In your BookingsPage.tsx, update the handleRoomClick function and RoomGrid props:
 
   const handleRoomClick = (room: Room) => {
     if (room.status !== "free") return;
@@ -266,129 +290,128 @@ const mappedGuests: Guest[] = (guestsData || []).map((g: RawGuest) => ({
     setSelectedRooms(freeRooms);
   };
 
-  // Then update the RoomGrid component in your render:
+  const handleConfirmBooking = async (data: any) => {
+    if (selectedRooms.length === 0) return;
 
-  // Find this function in your file (around line 285)
-  // REPLACE the entire handleConfirmBooking function with this:
+    try {
+      const res = await fetch("/api/check-in", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: data.name,
+          phone: data.phone,
+          address: data.address,
+          idProof: data.idProof,
+          room_id: selectedRooms[0].id,
+          days: data.days,
+          pax: data.pax,
+          mealPlan: data.mealPlan,
+          mealPlanCharge: data.mealPlanCharge,
+          guestCategory: data.guestCategory,
+          gstin: data.gstin,
+          companyName: data.companyName,
+          purposeOfVisit: data.purposeOfVisit,
+          advanceAmount: data.advanceAmount,
+          bookingType: data.bookingType,
+          hours: data.hours,
+          manualPrice: data.manualPrice,
+          totalAmount: data.totalAmount,
+          calculatedTotal: calculateTotal()
+        }),
+      });
 
-const handleConfirmBooking = async (data: any) => {
-  if (selectedRooms.length === 0) return;
+      const result = await res.json();
 
-  const res = await fetch("/api/check-in", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      name: data.name,
-      phone: data.phone,
-      address: data.address,
-      idProof: data.idProof,
-      room_id: selectedRooms[0].id,
-      days: data.days,
-      pax: data.pax,
-      mealPlan: data.mealPlan,
-      mealPlanCharge: data.mealPlanCharge,
-      guestCategory: data.guestCategory,
-      gstin: data.gstin,
-      companyName: data.companyName,
-      purposeOfVisit: data.purposeOfVisit, // ADD THIS
-    }),
-  });
+      if (!res.ok) {
+        alert(result.error || "Check-in failed");
+        return;
+      }
 
-  const text = await res.text();
-  let result: any;
+      setSelectedRooms([]);
+      setBookingOpen(false);
 
-  try {
-    result = JSON.parse(text);
-  } catch {
-    console.error("Non-JSON response:", text);
-    alert("Server error. Check API route.");
-    return;
-  }
+      alert(
+        `Check-in successful!\n\n` +
+        `Guest: ${data.name}\n` +
+        `Room PIN: ${result.room_pin}\n` +
+        `Total Amount: ₹${result.total_amount}\n` +
+        `Advance Paid: ₹${result.advance_paid}\n` +
+        `Balance Due: ₹${result.balance_due}\n\n` +
+        `Please share the PIN with the guest.`
+      );
 
-  if (!res.ok) {
-    alert(result.error || "Check-in failed");
-    return;
-  }
+      fetchRooms();
+      
+    } catch (error) {
+      console.error("Check-in error:", error);
+      alert("Check-in failed. Please try again.");
+    }
+  };
 
-  setSelectedRooms([]);
-  setBookingOpen(false);
-
-  alert(
-    `Check-in successful!\n\n` +
-      `Registration No: ${result.registration_no}\n` +
-      `Room PIN: ${result.room_pin}\n` +
-      `Purpose: ${result.purpose_of_visit}\n\n` + // ADD THIS
-      `Please share this PIN with the guest.`
-  );
-
-  fetchRooms();
-  fetchGuests();
-};
   const hourDiff = (iso: string) => {
     const start = new Date(iso).getTime();
     const now = Date.now();
     return Math.ceil((now - start) / (1000 * 60 * 60));
   };
 
-const handleCheckOut = async (guest: Guest) => {
-  const hoursStayed = hourDiff(guest.checkInISO);
-  const bookedHours = guest.bookedDays * 24;
+  const handleCheckOut = async (guest: Guest) => {
+    const hoursStayed = hourDiff(guest.checkInISO);
+    const bookedHours = guest.bookedDays * 24;
 
-  const extraHours = Math.max(0, hoursStayed - bookedHours);
-  const extraCharge = extraHours * HOURLY_LATE_FEE;
-  
-  // Check if guest was complimentary
-  const guestRecord = await supabase
-    .from("guests")
-    .select("guest_category, base_amount")
-    .eq("id", guest.id)
-    .single();
-  
-  let totalCharge;
-  if (guestRecord.data?.guest_category === "complimentary" || guest.baseAmount === 0) {
-    // For complimentary guests, only charge extra hours if applicable
-    totalCharge = extraCharge;
-  } else {
-    totalCharge = guest.baseAmount + extraCharge;
-  }
-
-  // Update rooms to housekeeping and clear guest ID
-  await supabase
-    .from("rooms")
-    .update({
-      status: "housekeeping",
-      current_guest_id: null,
-    })
-    .in("id", guest.roomIds);
-
-  // Update guest record
-  await supabase
-    .from("guests")
-    .update({
-      status: "checked-out",
-      check_out: new Date().toISOString(),
-      extra_hours: extraHours,
-      extra_charge: extraCharge,
-      total_charge: totalCharge,
-      room_pin: null, // Clear PIN on checkout
-      pin_code: null,
-    })
-    .eq("id", guest.id);
-
-  fetchRooms();
-  fetchGuests();
-  
-  // Show appropriate checkout message
-  if (guestRecord.data?.guest_category === "complimentary" || guest.baseAmount === 0) {
-    if (extraHours > 0) {
-      alert(`Guest checked out!\n\nComplimentary Stay\nExtra hours: ${extraHours}\nExtra charge: ₹${extraCharge}\nTotal: ₹${totalCharge}`);
+    const extraHours = Math.max(0, hoursStayed - bookedHours);
+    const extraCharge = extraHours * HOURLY_LATE_FEE;
+    
+    // Check if guest was complimentary
+    const guestRecord = await supabase
+      .from("guests")
+      .select("guest_category, base_amount")
+      .eq("id", guest.id)
+      .single();
+    
+    let totalCharge;
+    if (guestRecord.data?.guest_category === "complimentary" || guest.baseAmount === 0) {
+      // For complimentary guests, only charge extra hours if applicable
+      totalCharge = extraCharge;
     } else {
-      alert(`Guest checked out!\n\nComplimentary Stay - No charges`);
+      totalCharge = guest.baseAmount + extraCharge;
     }
-  } else {
-    alert(`Guest checked out!\n\nBase amount: ₹${guest.baseAmount}\nExtra hours: ${extraHours}\nExtra charge: ₹${extraCharge}\nTotal: ₹${totalCharge}`);
-  }
-};
+
+    // Update rooms to housekeeping and clear guest ID
+    await supabase
+      .from("rooms")
+      .update({
+        status: "housekeeping",
+        current_guest_id: null,
+      })
+      .in("id", guest.roomIds);
+
+    // Update guest record
+    await supabase
+      .from("guests")
+      .update({
+        status: "checked-out",
+        check_out: new Date().toISOString(),
+        extra_hours: extraHours,
+        extra_charge: extraCharge,
+        total_charge: totalCharge,
+        room_pin: null, // Clear PIN on checkout
+        pin_code: null,
+      })
+      .eq("id", guest.id);
+
+    fetchRooms();
+    
+    // Show appropriate checkout message
+    if (guestRecord.data?.guest_category === "complimentary" || guest.baseAmount === 0) {
+      if (extraHours > 0) {
+        alert(`Guest checked out!\n\nComplimentary Stay\nExtra hours: ${extraHours}\nExtra charge: ₹${extraCharge}\nTotal: ₹${totalCharge}`);
+      } else {
+        alert(`Guest checked out!\n\nComplimentary Stay - No charges`);
+      }
+    } else {
+      alert(`Guest checked out!\n\nBase amount: ₹${guest.baseAmount}\nExtra hours: ${extraHours}\nExtra charge: ₹${extraCharge}\nTotal: ₹${totalCharge}`);
+    }
+  };
 
   const markRoomCleaned = async (roomId: string) => {
     await supabase
@@ -409,124 +432,127 @@ const handleCheckOut = async (guest: Guest) => {
   // Quick stats for header
   const availableRooms = rooms.filter((r) => r.status === "free").length;
   const occupiedRooms = rooms.filter((r) => r.status === "occupied").length;
+  const housekeepingRooms = rooms.filter((r) => r.status === "housekeeping").length;
+  const maintenanceRooms = rooms.filter((r) => r.status === "maintenance").length;
   const totalRooms = rooms.length;
 
   /* ===================== ENHANCED GUEST LIST WITH PINS ===================== */
 
-const EnhancedGuestList = ({
-  guests,
-  onCheckout,
-}: {
-  guests: Guest[];
-  onCheckout: (guest: Guest) => void;
-}) => {
-  const [showGuestPins, setShowGuestPins] = useState<Record<string, boolean>>(
-    {}
-  );
+  const EnhancedGuestList = ({
+    guests,
+    onCheckout,
+  }: {
+    guests: Guest[];
+    onCheckout: (guest: Guest) => void;
+  }) => {
+    const [showGuestPins, setShowGuestPins] = useState<Record<string, boolean>>(
+      {}
+    );
 
-  const toggleGuestPin = (guestId: string) => {
-    setShowGuestPins((prev) => ({
-      ...prev,
-      [guestId]: !prev[guestId],
-    }));
-  };
+    const toggleGuestPin = (guestId: string) => {
+      setShowGuestPins((prev) => ({
+        ...prev,
+        [guestId]: !prev[guestId],
+      }));
+    };
 
-  const copyGuestPin = async (pin: string, guestId: string) => {
-    try {
-      await navigator.clipboard.writeText(pin);
-      alert("PIN copied to clipboard!");
-    } catch (err) {
-      console.error("Failed to copy PIN:", err);
-    }
-  };
+    const copyGuestPin = async (pin: string, guestId: string) => {
+      try {
+        await navigator.clipboard.writeText(pin);
+        alert("PIN copied to clipboard!");
+      } catch (err) {
+        console.error("Failed to copy PIN:", err);
+      }
+    };
 
-  return (
-    <div className="space-y-3">
-      {guests.length === 0 ? (
-        <div className="text-center py-8 text-gray-500">
-          No guests currently checked in
-        </div>
-      ) : (
-        guests.map((guest) => {
-          const guestRooms = rooms.filter((r) => r.guestId === guest.id);
-          const displayPin = showGuestPins[guest.id] ? guest.roomPin : "••••";
+    return (
+      <div className="space-y-3">
+        {guests.length === 0 ? (
+          <div className="text-center py-8 text-gray-500">
+            No guests currently checked in
+          </div>
+        ) : (
+          guests.map((guest) => {
+            const guestRooms = rooms.filter((r) => r.guestId === guest.id);
+            const displayPin = showGuestPins[guest.id] ? guest.roomPin : "••••";
 
-          return (
-            <motion.div
-              key={guest.id} // ADD THIS KEY PROP
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-gradient-to-r from-slate-50 to-blue-50 rounded-2xl p-4 border border-slate-200"
-            >
-              <div className="flex justify-between items-start mb-2">
-                <div>
-                  <h4 className="font-bold text-slate-900">{guest.name}</h4>
-                  <p className="text-sm text-slate-600">
-                    Rooms: {guestRooms.map((r) => r.name).join(", ")}
-                  </p>
-                </div>
-                <button
-                  onClick={() => onCheckout(guest)}
-                  className="px-3 py-1 bg-gradient-to-r from-rose-50 to-pink-50 text-rose-700 rounded-xl text-sm font-medium hover:from-rose-100 hover:to-pink-100 transition-all"
-                >
-                  Checkout
-                </button>
-              </div>
-
-              <div className="mt-3 pt-3 border-t border-slate-200">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Key className="h-4 w-4 text-blue-600" />
-                    <span className="text-sm font-medium text-slate-700">
-                      Room PIN:
-                    </span>
-                    <span
-                      className={`font-mono text-sm ${
-                        showGuestPins[guest.id]
-                          ? "text-blue-700"
-                          : "text-slate-500"
-                      }`}
-                    >
-                      {displayPin}
-                    </span>
+            return (
+              <motion.div
+                key={guest.id}
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="bg-gradient-to-r from-slate-50 to-blue-50 rounded-2xl p-4 border border-slate-200"
+              >
+                <div className="flex justify-between items-start mb-2">
+                  <div>
+                    <h4 className="font-bold text-slate-900">{guest.name}</h4>
+                    <p className="text-sm text-slate-600">
+                      Rooms: {guestRooms.map((r) => r.name).join(", ")}
+                    </p>
                   </div>
-                  <div className="flex gap-1">
-                    <button
-                      onClick={() => toggleGuestPin(guest.id)}
-                      className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-                      title={
-                        showGuestPins[guest.id] ? "Hide PIN" : "Show PIN"
-                      }
-                    >
-                      {showGuestPins[guest.id] ? (
-                        <EyeOff className="h-4 w-4 text-slate-600" />
-                      ) : (
-                        <Eye className="h-4 w-4 text-slate-600" />
-                      )}
-                    </button>
-                    {guest.roomPin && showGuestPins[guest.id] && (
-                      <button
-                        onClick={() => copyGuestPin(guest.roomPin!, guest.id)}
-                        className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
-                        title="Copy PIN"
+                  <button
+                    onClick={() => onCheckout(guest)}
+                    className="px-3 py-1 bg-gradient-to-r from-rose-50 to-pink-50 text-rose-700 rounded-xl text-sm font-medium hover:from-rose-100 hover:to-pink-100 transition-all"
+                  >
+                    Checkout
+                  </button>
+                </div>
+
+                <div className="mt-3 pt-3 border-t border-slate-200">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-4 w-4 text-blue-600" />
+                      <span className="text-sm font-medium text-slate-700">
+                        Room PIN:
+                      </span>
+                      <span
+                        className={`font-mono text-sm ${
+                          showGuestPins[guest.id]
+                            ? "text-blue-700"
+                            : "text-slate-500"
+                        }`}
                       >
-                        <Copy className="h-4 w-4 text-slate-600" />
+                        {displayPin}
+                      </span>
+                    </div>
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => toggleGuestPin(guest.id)}
+                        className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                        title={
+                          showGuestPins[guest.id] ? "Hide PIN" : "Show PIN"
+                        }
+                      >
+                        {showGuestPins[guest.id] ? (
+                          <EyeOff className="h-4 w-4 text-slate-600" />
+                        ) : (
+                          <Eye className="h-4 w-4 text-slate-600" />
+                        )}
                       </button>
-                    )}
+                      {guest.roomPin && showGuestPins[guest.id] && (
+                        <button
+                          onClick={() => copyGuestPin(guest.roomPin!, guest.id)}
+                          className="p-1 hover:bg-slate-100 rounded-lg transition-colors"
+                          title="Copy PIN"
+                        >
+                          <Copy className="h-4 w-4 text-slate-600" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-1">
+                    Checked in:{" "}
+                    {new Date(guest.checkInISO).toLocaleDateString()}
                   </div>
                 </div>
-                <div className="text-xs text-slate-500 mt-1">
-                  Checked in:{" "}
-                  {new Date(guest.checkInISO).toLocaleDateString()}
-                </div>
-              </div>
-            </motion.div>
-          );
-        })
-      )}
-    </div>
-  );
-};
+              </motion.div>
+            );
+          })
+        )}
+      </div>
+    );
+  };
+
   /* ===================== UI ===================== */
 
   return (
@@ -563,7 +589,7 @@ const EnhancedGuestList = ({
             </div>
 
             {/* Quick Stats */}
-            <div className="flex gap-4 text-center">
+            <div className="flex flex-wrap gap-4 text-center">
               <div className="bg-blue-50 rounded-2xl px-4 py-2 border border-blue-200">
                 <div className="text-lg font-bold text-blue-700">
                   {availableRooms}
@@ -575,6 +601,18 @@ const EnhancedGuestList = ({
                   {occupiedRooms}
                 </div>
                 <div className="text-xs text-rose-600">Occupied</div>
+              </div>
+              <div className="bg-yellow-50 rounded-2xl px-4 py-2 border border-yellow-200">
+                <div className="text-lg font-bold text-yellow-700">
+                  {housekeepingRooms}
+                </div>
+                <div className="text-xs text-yellow-600">Housekeeping</div>
+              </div>
+              <div className="bg-amber-50 rounded-2xl px-4 py-2 border border-amber-200">
+                <div className="text-lg font-bold text-amber-700">
+                  {maintenanceRooms}
+                </div>
+                <div className="text-xs text-amber-600">Maintenance</div>
               </div>
               <div className="bg-emerald-50 rounded-2xl px-4 py-2 border border-emerald-200">
                 <div className="text-lg font-bold text-emerald-700">
@@ -591,6 +629,19 @@ const EnhancedGuestList = ({
             </div>
           </div>
         </motion.div>
+
+        {/* Debug Stats - Remove after testing */}
+        <div className="mt-4 p-3 bg-slate-100 rounded-xl border border-slate-200">
+          <div className="text-sm text-slate-700">
+            <div className="font-semibold mb-1">Room Status Breakdown:</div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              <div>Free: {availableRooms} rooms</div>
+              <div>Occupied: {occupiedRooms} rooms</div>
+              <div>Housekeeping: {housekeepingRooms} rooms</div>
+              <div>Maintenance: {maintenanceRooms} rooms</div>
+            </div>
+          </div>
+        </div>
 
         {/* Main Grid */}
         <motion.div
@@ -733,15 +784,12 @@ const EnhancedGuestList = ({
                   guests={occupiedGuests.map((g) => ({
                     id: g.id,
                     name: g.name,
-                    pin: g.roomPin,
+                    status: g.status,
+                    room_ids: g.roomIds,
                   }))}
                   onRoomClick={handleRoomClick}
-                  onSelectionChange={handleSelectionChange} // Add this prop
+                  onSelectionChange={handleSelectionChange}
                   onStatusChange={handleStatusChange}
-                  showPins={showPins}
-                  togglePinVisibility={togglePinVisibility}
-                  copyPinToClipboard={copyPinToClipboard}
-                  copiedPin={copiedPin}
                 />
               )}
             </motion.div>

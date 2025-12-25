@@ -43,6 +43,7 @@ interface Props {
     advanceAmount: number;
     bookingType: string;
     hours: number;
+    totalAmount: number; // Added total amount
   }) => void;
   calculatedTotal: number;
 }
@@ -134,11 +135,27 @@ export default function CheckInDialog({
   };
 
   const mealPlanCharge = calculateMealPlanCharge();
-  // If complimentary, total should be 0
-  const totalWithMealPlan =
-    form.guestCategory === "complimentary"
-      ? 0
-      : calculatedTotal + mealPlanCharge;
+  
+  // Calculate total amount
+  const calculateTotalAmount = () => {
+    // If complimentary, total should be 0
+    if (form.guestCategory === "complimentary") {
+      return 0;
+    }
+    
+    // Use manual price if provided and valid
+    if (form.manualPrice && form.manualPrice.trim() !== "") {
+      const manualPriceNum = Number(form.manualPrice);
+      if (!isNaN(manualPriceNum) && manualPriceNum >= 0) {
+        return manualPriceNum + mealPlanCharge;
+      }
+    }
+    
+    // Otherwise use calculated room total + meal plan
+    return calculatedTotal + mealPlanCharge;
+  };
+
+  const totalAmount = calculateTotalAmount();
 
   // Dropzone for ID upload
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -295,7 +312,7 @@ export default function CheckInDialog({
     }
 
     // Determine booking type based on guest category
-    const bookingType = form.guestCategory === 'freshen-up' ? 'freshen-up' : 'regular';
+    const bookingType = form.guestCategory === 'freshen-up' ? 'hourly' : 'daily';
     
     // Check if this is a freshen-up booking
     const isFreshenUp = form.guestCategory === 'freshen-up';
@@ -322,6 +339,7 @@ export default function CheckInDialog({
       advanceAmount: form.advanceAmount,
       bookingType: bookingType,
       hours: hours,
+      totalAmount: totalAmount, // Pass the calculated total amount
     });
 
     // Reset form
@@ -419,6 +437,9 @@ export default function CheckInDialog({
       return newForm;
     });
   };
+
+  // Calculate balance due
+  const balanceDue = Math.max(0, totalAmount - form.advanceAmount);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -818,7 +839,7 @@ export default function CheckInDialog({
                 >
                   {form.guestCategory === "complimentary"
                     ? "🎁 Complimentary (₹0)"
-                    : `₹${totalWithMealPlan.toLocaleString("en-IN")}`}
+                    : `₹${totalAmount.toLocaleString("en-IN")}`}
                 </span>
               </div>
               <div className="border-t pt-2 flex justify-between">
@@ -826,7 +847,7 @@ export default function CheckInDialog({
                   Balance Due:
                 </span>
                 <span className="font-bold text-xl text-blue-700">
-                  ₹{Math.max(0, totalWithMealPlan - form.advanceAmount).toLocaleString("en-IN")}
+                  ₹{balanceDue.toLocaleString("en-IN")}
                 </span>
               </div>
             </div>
