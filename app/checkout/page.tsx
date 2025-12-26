@@ -1668,7 +1668,7 @@ export default function CheckoutPage() {
                 }}>
                   <img 
                     src="/logo.png" 
-                    alt="Mountain Pass Resort" 
+                    alt="Mountain Pass Residency" 
                     style={{ width: '100%', height: '100%', objectFit: 'contain' }}
                   />
                 </div>

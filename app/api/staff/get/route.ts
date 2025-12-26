@@ -1,5 +1,6 @@
+// app/api/staff/get/route.ts
 import { NextResponse } from "next/server";
-import { supabaseServer } from "@/lib/supabaseServer";
+import { supabaseAdmin } from "@/lib/supabaseAdmin"; // Use the same client
 
 export async function GET(req: Request) {
   try {
@@ -10,7 +11,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: "Missing ID" }, { status: 400 });
     }
 
-    const { data, error } = await supabaseServer
+    const { data, error } = await supabaseAdmin
       .from("staff")
       .select("*")
       .eq("id", id)

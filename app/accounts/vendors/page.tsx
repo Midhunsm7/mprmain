@@ -237,7 +237,7 @@ const generatePDF = async () => {
     // Company Name and Tagline
     doc.setFontSize(20);
     doc.setTextColor(15, 23, 42); // slate-900
-    doc.text("MOUNTAIN PASS RESORT & SPA", pageWidth / 2, 60, { align: "center" });
+    doc.text("MOUNTAIN PASS RESIDENCY", pageWidth / 2, 60, { align: "center" });
     
     // Company Details
     doc.setFontSize(10);
@@ -1119,7 +1119,7 @@ const generatePDF = async () => {
                     </div>
                     <div>
                       <div className="text-2xl font-bold text-slate-900">{COMPANY_INFO.name}</div>
-                      <div className="text-slate-600">RESORT & SPA</div>
+                     
                     </div>
                   </div>
                   

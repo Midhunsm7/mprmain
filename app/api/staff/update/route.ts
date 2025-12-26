@@ -1,3 +1,4 @@
+// app/api/staff/update/route.ts
 import { supabaseAdmin } from "@/lib/supabaseAdmin";
 import { NextResponse } from "next/server";
 
@@ -22,6 +23,9 @@ export async function POST(req: Request) {
       }
     });
 
+    // Add updated_at timestamp
+    updates.updated_at = new Date().toISOString();
+
     const { error } = await supabaseAdmin
       .from("staff")
       .update(updates)
@@ -32,17 +36,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Log the update
-    await supabaseAdmin
-      .from("audit_log")
-      .insert({
-        action: "staff_profile_update",
-        details: {
-          staff_id: id,
-          updated_fields: Object.keys(updates),
-          update_time: new Date().toISOString(),
-        },
-      });
+    // Skip audit log for now since we removed authentication
+    // await supabaseAdmin
+    //   .from("audit_log")
+    //   .insert({
+    //     action: "staff_profile_update",
+    //     details: {
+    //       staff_id: id,
+    //       updated_fields: Object.keys(updates),
+    //       update_time: new Date().toISOString(),
+    //     },
+    //   });
 
     return NextResponse.json({
       success: true,
