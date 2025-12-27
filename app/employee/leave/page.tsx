@@ -1,12 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { 
   Calendar, 
@@ -14,16 +15,20 @@ import {
   Clock, 
   CheckCircle, 
   XCircle, 
-  AlertCircle, 
   Loader2,
   TrendingUp,
   CalendarDays,
   RefreshCw,
   User,
   FileText,
-  ChevronRight,
-  Sparkles,
-  BarChart3
+  BarChart3,
+  DollarSign,
+  LogOut,
+  Key,
+  UserCircle,
+  Building2,
+  AlertCircle,
+  ChevronRight
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -31,81 +36,158 @@ interface LeaveRequest {
   id: string;
   reason: string;
   days: number;
-  stage: string;
+  status: string;
+  leave_type: string;
+  lop_days?: number;
+  salary_deduction?: number;
   created_at: string;
-  hr_comment?: string;
-  admin_comment?: string;
+  hr_remarks?: string;
+  admin_remarks?: string;
+}
+
+interface LeaveStats {
+  el_limit: number;
+  el_used: number;
+  available_el: number;
+  total_requests: number;
+  approved_requests: number;
+  pending_requests: number;
+  total_lop_deduction: number;
+}
+
+interface EmployeeSession {
+  employee_id: string;
+  employee_login_id: string;
+  name: string;
+  department?: string;
+  designation?: string;
+  logged_in_at: string;
 }
 
 export default function EmployeeLeavePage() {
   const [leaveList, setLeaveList] = useState<LeaveRequest[]>([]);
-  const [leaveLimit, setLeaveLimit] = useState(3);
-  const [usedLeave, setUsedLeave] = useState(0);
+  const [stats, setStats] = useState<LeaveStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [employee, setEmployee] = useState<EmployeeSession | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const router = useRouter();
 
   const [modalOpen, setModalOpen] = useState(false);
   const [reason, setReason] = useState("");
   const [days, setDays] = useState(1);
+  const [leaveType, setLeaveType] = useState("EL");
 
-  // TODO: Replace with auth later
-  const EMPLOYEE_ID = "test-user-123";
+  useEffect(() => {
+    checkAuth();
+  }, []);
 
+const checkAuth = async () => {
+  try {
+    console.log("Checking authentication...");
+    const res = await fetch('/api/employee/auth/session');
+    const data = await res.json();
+    
+    console.log("Session check response:", {
+      status: res.status,
+      hasSession: !!data.session,
+      error: data.error
+    });
+
+    if (res.ok && data.session) {
+      setEmployee(data.session);
+      setIsAuthenticated(true);
+      loadLeaves();
+    } else {
+      console.log("No valid session, redirecting to login");
+      toast.error("Please login to access leave portal", {
+        description: data.error || "Session expired",
+      });
+      router.push(`/employee/login?from=${encodeURIComponent(pathname)}`);
+    }
+  } catch (error) {
+    console.error("Auth check error:", error);
+    toast.error("Session expired. Please login again.");
+    router.push(`/employee/login?from=${encodeURIComponent(pathname)}`);
+  }
+};
   const loadLeaves = async () => {
+    if (!isAuthenticated) return;
+    
     setLoading(true);
     try {
-const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
+      const res = await fetch('/api/employee/leaves');
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        if (res.status === 401) {
+          toast.error("Session expired. Please login again.");
+          router.push('/employee/login');
+          return;
+        }
+        throw new Error(data.error);
+      }
+      
       setLeaveList(data.leaves || []);
-
-      // Count approved leaves (same month)
-      const currentMonth = new Date().toISOString().slice(0, 7);
-      const approved = (data.leaves || []).filter(
-        (l: any) => l.stage === "Approved" && l.created_at.slice(0, 7) === currentMonth
-      );
-
-      setUsedLeave(approved.reduce((sum: number, l: any) => sum + l.days, 0));
-    } catch (err: any) {
-      toast.error(err.message || "Failed to load leave data");
+      setStats(data.stats || null);
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to load leave data";
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadLeaves();
-  }, []);
-
   const submitLeave = async () => {
-    if (!reason.trim()) return toast.error("Please enter a reason");
-    if (days < 1) return toast.error("Invalid number of days");
+    if (!reason.trim()) {
+      toast.error("Please enter a reason");
+      return;
+    }
+    if (days < 1) {
+      toast.error("Invalid number of days");
+      return;
+    }
 
-    if (usedLeave + days > leaveLimit)
-      return toast.error(`You only have ${leaveLimit - usedLeave} leave days left this month.`);
+    // Check EL balance if applying for EL
+    if (leaveType === "EL" && stats && days > stats.available_el) {
+      toast.error(`You only have ${stats.available_el} EL days left this month.`);
+      return;
+    }
 
     setSubmitting(true);
     try {
       const res = await fetch("/api/employee/leave/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ staff_id: EMPLOYEE_ID, reason, days }),
+        body: JSON.stringify({ 
+          reason, 
+          days,
+          leave_type: leaveType 
+        }),
       });
 
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) {
+        if (res.status === 401) {
+          toast.error("Session expired. Please login again.");
+          router.push('/employee/login');
+          return;
+        }
+        throw new Error(data.error);
+      }
 
       toast.success("Leave request submitted successfully", {
-        description: "Your leave request has been sent for approval",
+        description: "Your leave request has been sent for HR approval",
         icon: <CheckCircle className="h-5 w-5 text-emerald-500" />,
       });
       setModalOpen(false);
       setReason("");
       setDays(1);
-      loadLeaves();
-    } catch (err: any) {
-      toast.error(err.message, {
+      setLeaveType("EL");
+      loadLeaves(); // Refresh the list
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to submit leave request";
+      toast.error(errorMessage, {
         description: "Please try again or contact HR",
         icon: <XCircle className="h-5 w-5 text-rose-500" />,
       });
@@ -114,16 +196,25 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
     }
   };
 
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/employee/auth/logout', { method: 'POST' });
+      toast.success("Logged out successfully");
+      router.push('/employee/login');
+    } catch (error) {
+      toast.error("Failed to logout");
+    }
+  };
+
   const statusColor = (status: string) => {
     switch (status) {
       case "Approved":
         return "bg-emerald-100 text-emerald-800 border-emerald-200";
-      case "Pending-Admin":
+      case "HR-Approved":
         return "bg-blue-100 text-blue-800 border-blue-200";
-      case "Pending-HR":
+      case "Pending":
         return "bg-amber-100 text-amber-800 border-amber-200";
-      case "Rejected-HR":
-      case "Rejected-Admin":
+      case "Rejected":
         return "bg-rose-100 text-rose-800 border-rose-200";
       default:
         return "bg-slate-100 text-slate-800 border-slate-200";
@@ -134,14 +225,14 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
     switch (status) {
       case "Approved":
         return <CheckCircle className="h-4 w-4 text-emerald-600" />;
-      case "Pending-Admin":
-      case "Pending-HR":
+      case "HR-Approved":
+        return <Clock className="h-4 w-4 text-blue-600" />;
+      case "Pending":
         return <Clock className="h-4 w-4 text-amber-600" />;
-      case "Rejected-HR":
-      case "Rejected-Admin":
+      case "Rejected":
         return <XCircle className="h-4 w-4 text-rose-600" />;
       default:
-        return <AlertCircle className="h-4 w-4 text-slate-600" />;
+        return <Clock className="h-4 w-4 text-slate-600" />;
     }
   };
 
@@ -153,8 +244,16 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
     });
   };
 
-  const leavePercentage = (usedLeave / leaveLimit) * 100;
-  const availableLeave = leaveLimit - usedLeave;
+  if (!isAuthenticated) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-600" />
+          <p className="mt-2 text-gray-600">Loading...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-blue-50 p-4 md:p-6 lg:p-8">
@@ -177,9 +276,20 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                 <h1 className="text-3xl md:text-4xl font-bold bg-gradient-to-r from-slate-900 to-slate-700 bg-clip-text text-transparent">
                   Leave Portal
                 </h1>
-                <p className="text-slate-600 mt-2 text-sm md:text-base">
-                  Apply for leave and track your requests in real-time
-                </p>
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <div className="flex items-center gap-1 text-sm text-slate-700 bg-blue-50 px-2 py-1 rounded-full">
+                    <UserCircle className="h-3 w-3 text-blue-600" />
+                    <span className="font-medium">{employee?.name}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-sm text-slate-700 bg-emerald-50 px-2 py-1 rounded-full">
+                    <Building2 className="h-3 w-3 text-emerald-600" />
+                    <span>{employee?.department || "No Department"}</span>
+                  </div>
+                  <div className="flex items-center gap-1 text-sm text-slate-700 bg-amber-50 px-2 py-1 rounded-full">
+                    <Key className="h-3 w-3 text-amber-600" />
+                    <span className="font-mono">{employee?.employee_login_id}</span>
+                  </div>
+                </div>
               </div>
             </div>
             
@@ -190,7 +300,7 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
               </div>
               <span className="text-slate-400">•</span>
               <span className="text-slate-600">
-                Leave Balance: {availableLeave} days remaining
+                EL Balance: {stats?.available_el ?? 0} days remaining
               </span>
             </div>
           </div>
@@ -213,12 +323,21 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
               <Plus className="h-5 w-5" />
               <span className="font-semibold">Apply for Leave</span>
             </Button>
+
+            <Button
+              variant="ghost"
+              onClick={handleLogout}
+              className="text-slate-600 hover:text-slate-800 hover:bg-slate-100"
+              size="icon"
+            >
+              <LogOut className="h-5 w-5" />
+            </Button>
           </div>
         </div>
       </div>
 
       {/* Stats Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-8">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 md:gap-6 mb-8">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -230,29 +349,29 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
               <CalendarDays className="h-6 w-6 text-blue-600" />
             </div>
             <div className="text-xs font-medium px-3 py-1 bg-blue-50 text-blue-700 rounded-full">
-              Balance
+              EL Balance
             </div>
           </div>
           <div className="text-3xl font-bold text-slate-900 mb-2">
-            {availableLeave}
-            <span className="text-sm font-normal text-slate-500"> / {leaveLimit} days</span>
+            {stats?.available_el ?? 0}
+            <span className="text-sm font-normal text-slate-500"> / {stats?.el_limit ?? 4} days</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <Calendar className="h-4 w-4" />
-            <span>Leave days remaining</span>
+            <span>1 EL per week</span>
           </div>
           <div className="mt-4">
             <div className="h-2 bg-slate-200 rounded-full overflow-hidden">
               <motion.div
                 initial={{ width: 0 }}
-                animate={{ width: `${leavePercentage}%` }}
+                animate={{ width: `${stats ? (stats.el_used / stats.el_limit) * 100 : 0}%` }}
                 transition={{ duration: 1, ease: "easeOut" }}
                 className="h-full bg-gradient-to-r from-blue-500 to-indigo-500 rounded-full"
               />
             </div>
             <div className="flex justify-between text-xs text-slate-500 mt-2">
-              <span>Used: {usedLeave} days</span>
-              <span>{Math.round(leavePercentage)}% utilized</span>
+              <span>Used: {stats?.el_used ?? 0} days</span>
+              <span>{stats ? Math.round((stats.el_used / stats.el_limit) * 100) : 0}% utilized</span>
             </div>
           </div>
         </motion.div>
@@ -272,7 +391,7 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
             </div>
           </div>
           <div className="text-3xl font-bold text-emerald-700 mb-2">
-            {leaveList.filter(l => l.stage === "Approved").length}
+            {stats?.approved_requests ?? 0}
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-500">
             <FileText className="h-4 w-4" />
@@ -295,11 +414,34 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
             </div>
           </div>
           <div className="text-3xl font-bold text-amber-600 mb-2">
-            {leaveList.filter(l => l.stage.includes("Pending")).length}
+            {stats?.pending_requests ?? 0}
           </div>
           <div className="flex items-center gap-2 text-sm text-slate-500">
-            <AlertCircle className="h-4 w-4" />
+            <Clock className="h-4 w-4" />
             <span>Requests pending review</span>
+          </div>
+        </motion.div>
+
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="bg-white rounded-2xl shadow-lg border border-slate-200 p-5 hover:shadow-xl transition-all duration-300 hover:-translate-y-1"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div className="p-3 bg-rose-50 rounded-xl">
+              <DollarSign className="h-6 w-6 text-rose-600" />
+            </div>
+            <div className="text-xs font-medium px-3 py-1 bg-rose-50 text-rose-700 rounded-full">
+              LOP Deduction
+            </div>
+          </div>
+          <div className="text-3xl font-bold text-rose-600 mb-2">
+            ₹{(stats?.total_lop_deduction ?? 0).toLocaleString('en-IN')}
+          </div>
+          <div className="flex items-center gap-2 text-sm text-slate-500">
+            <DollarSign className="h-4 w-4" />
+            <span>Total salary deduction</span>
           </div>
         </motion.div>
       </div>
@@ -372,9 +514,14 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                                 <Calendar className="h-5 w-5 text-slate-600" />
                               </div>
                               <div className="flex-1">
-                                <h4 className="font-semibold text-slate-800 group-hover:text-blue-700">
-                                  {request.reason}
-                                </h4>
+                                <div className="flex items-center gap-2 mb-2">
+                                  <h4 className="font-semibold text-slate-800 group-hover:text-blue-700">
+                                    {request.reason}
+                                  </h4>
+                                  <Badge variant="outline" className="text-xs">
+                                    {request.leave_type}
+                                  </Badge>
+                                </div>
                                 <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 mt-2">
                                   <span className="flex items-center gap-1">
                                     <Calendar className="h-3 w-3" />
@@ -385,18 +532,32 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                                     <Clock className="h-3 w-3" />
                                     {request.days} {request.days === 1 ? 'day' : 'days'}
                                   </span>
+                                  {request.lop_days && request.lop_days > 0 && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="flex items-center gap-1 text-rose-600">
+                                        <DollarSign className="h-3 w-3" />
+                                        {request.lop_days} LOP day{request.lop_days > 1 ? 's' : ''}
+                                        {request.salary_deduction && request.salary_deduction > 0 && (
+                                          <span className="ml-1">
+                                            (₹{request.salary_deduction.toLocaleString('en-IN')})
+                                          </span>
+                                        )}
+                                      </span>
+                                    </>
+                                  )}
                                 </div>
-                                {(request.hr_comment || request.admin_comment) && (
+                                {(request.hr_remarks || request.admin_remarks) && (
                                   <div className="mt-3 p-3 bg-slate-50 rounded-lg border border-slate-200">
                                     <div className="text-sm text-slate-600">
-                                      {request.hr_comment && (
+                                      {request.hr_remarks && (
                                         <div className="mb-1">
-                                          <span className="font-medium text-slate-700">HR:</span> {request.hr_comment}
+                                          <span className="font-medium text-slate-700">HR:</span> {request.hr_remarks}
                                         </div>
                                       )}
-                                      {request.admin_comment && (
+                                      {request.admin_remarks && (
                                         <div>
-                                          <span className="font-medium text-slate-700">Admin:</span> {request.admin_comment}
+                                          <span className="font-medium text-slate-700">Admin:</span> {request.admin_remarks}
                                         </div>
                                       )}
                                     </div>
@@ -407,10 +568,10 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                           </div>
                           
                           <div className="flex items-center gap-3">
-                            <Badge className={`${statusColor(request.stage)} px-3 py-1.5 border`}>
+                            <Badge className={`${statusColor(request.status)} px-3 py-1.5 border`}>
                               <div className="flex items-center gap-2">
-                                {statusIcon(request.stage)}
-                                <span>{request.stage}</span>
+                                {statusIcon(request.status)}
+                                <span>{request.status}</span>
                               </div>
                             </Badge>
                             <ChevronRight className="h-4 w-4 text-slate-400 group-hover:text-blue-600 transition-colors" />
@@ -423,11 +584,64 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
               </AnimatePresence>
             </div>
           </div>
+
+          {/* LOP Details Card */}
+          {leaveList.filter(l => l.lop_days && l.lop_days > 0).length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 }}
+              className="mt-6"
+            >
+              <Card className="border-red-200">
+                <CardHeader>
+                  <CardTitle className="text-red-700 flex items-center gap-2">
+                    <DollarSign className="h-5 w-5" />
+                    Loss of Pay (LOP) Details
+                  </CardTitle>
+                  <CardDescription>
+                    These leaves will result in salary deduction
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3">
+                    {leaveList
+                      .filter(l => l.lop_days && l.lop_days > 0)
+                      .map((request) => (
+                        <div key={request.id} className="p-3 bg-red-50 rounded-lg border border-red-200">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <div className="font-medium">{request.reason}</div>
+                              <div className="text-sm text-red-600">
+                                {request.lop_days} LOP day{request.lop_days && request.lop_days > 1 ? 's' : ''}
+                              </div>
+                            </div>
+                            <div className="text-right">
+                              <div className="text-lg font-bold text-red-700">
+                                ₹{request.salary_deduction?.toLocaleString('en-IN') || '0'}
+                              </div>
+                              <div className="text-sm text-red-600">
+                                Salary deduction
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
         </div>
 
         {/* Quick Stats Sidebar */}
         <div className="lg:col-span-1">
-          <div className="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden h-full">
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.3 }}
+            className="bg-white rounded-2xl shadow-lg border border-slate-200 overflow-hidden h-full"
+          >
             <div className="p-6 border-b border-slate-100 bg-gradient-to-r from-slate-50 to-white">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-blue-50 rounded-lg">
@@ -451,31 +665,37 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                 
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Total Leave Limit</span>
-                    <span className="font-semibold text-slate-900">{leaveLimit} days</span>
+                    <span className="text-slate-600">Total EL Limit</span>
+                    <span className="font-semibold text-slate-900">{stats?.el_limit ?? 4} days</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Leave Used</span>
-                    <span className="font-semibold text-blue-600">{usedLeave} days</span>
+                    <span className="text-slate-600">EL Used</span>
+                    <span className="font-semibold text-blue-600">{stats?.el_used ?? 0} days</span>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Available Balance</span>
-                    <span className="font-semibold text-emerald-600">{availableLeave} days</span>
+                    <span className="text-slate-600">Available EL</span>
+                    <span className="font-semibold text-emerald-600">{stats?.available_el ?? 0} days</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-600">Total LOP Days</span>
+                    <span className="font-semibold text-rose-600">
+                      {leaveList.reduce((sum, l) => sum + (l.lop_days || 0), 0)} days
+                    </span>
                   </div>
                 </div>
                 
                 <div className="pt-4 border-t border-slate-200">
                   <div className="text-sm text-slate-500 mb-3">Request Status Distribution</div>
                   <div className="space-y-2">
-                    {["Approved", "Pending-Admin", "Pending-HR", "Rejected-HR", "Rejected-Admin"].map(status => {
-                      const count = leaveList.filter(l => l.stage === status).length;
+                    {["Approved", "HR-Approved", "Pending", "Rejected"].map(status => {
+                      const count = leaveList.filter(l => l.status === status).length;
                       if (count === 0) return null;
                       
                       return (
                         <div key={status} className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             {statusIcon(status)}
-                            <span className="text-sm text-slate-700">{status.replace('-', ' ')}</span>
+                            <span className="text-sm text-slate-700">{status}</span>
                           </div>
                           <span className="font-medium text-slate-900">{count}</span>
                         </div>
@@ -485,7 +705,7 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                 </div>
               </div>
             </div>
-          </div>
+          </motion.div>
         </div>
       </div>
 
@@ -518,6 +738,20 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
             </div>
 
             <div>
+              <label className="text-sm font-medium text-slate-700 mb-2 block">Leave Type</label>
+              <select
+                value={leaveType}
+                onChange={(e) => setLeaveType(e.target.value)}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 focus:border-blue-500 focus:ring-blue-500"
+              >
+                <option value="EL">Earned Leave (EL)</option>
+                <option value="Sick">Sick Leave</option>
+                <option value="Casual">Casual Leave</option>
+                <option value="LOP">Loss of Pay (LOP)</option>
+              </select>
+            </div>
+
+            <div>
               <label className="text-sm font-medium text-slate-700 mb-2 block">Number of Days</label>
               <div className="relative">
                 <Input 
@@ -531,18 +765,30 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
                   <Calendar className="h-5 w-5" />
                 </div>
               </div>
-              <p className="text-sm text-slate-500 mt-2">
-                Available leave days: <span className="font-semibold text-emerald-600">{availableLeave}</span>
-              </p>
+              {leaveType === "EL" && (
+                <p className="text-sm text-slate-500 mt-2">
+                  Available EL days: <span className="font-semibold text-emerald-600">{stats?.available_el ?? 0}</span>
+                  {stats && days > stats.available_el && (
+                    <span className="text-rose-600 ml-2">
+                      Warning: {days - stats.available_el} days will be LOP
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
 
             <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="h-5 w-5 text-blue-600 mt-0.5" />
-                <div className="text-sm text-blue-700">
-                  <strong>Note:</strong> Your leave request will be reviewed by HR and Admin. 
-                  You'll receive notifications about the status.
-                </div>
+              <div className="text-sm text-blue-700">
+                <strong className="flex items-center gap-1 mb-1">
+                  <AlertCircle className="h-4 w-4" />
+                  Important Information:
+                </strong>
+                <ul className="list-disc pl-5 mt-1 space-y-1">
+                  <li>1 EL is earned per week (approx. 4 per month)</li>
+                  <li>Excess days will be considered as LOP</li>
+                  <li>LOP days result in salary deduction</li>
+                  <li>Approval workflow: Employee → HR → Admin</li>
+                </ul>
               </div>
             </div>
 
@@ -615,24 +861,6 @@ const res = await fetch(`/api/hr/leave/list?staff_id=${EMPLOYEE_ID}`);
         
         .animation-delay-4000 {
           animation-delay: 4s;
-        }
-        
-        /* Custom scrollbar */
-        ::-webkit-scrollbar {
-          width: 8px;
-        }
-        
-        ::-webkit-scrollbar-track {
-          background: #f1f5f9;
-        }
-        
-        ::-webkit-scrollbar-thumb {
-          background: #cbd5e1;
-          border-radius: 4px;
-        }
-        
-        ::-webkit-scrollbar-thumb:hover {
-          background: #94a3b8;
         }
       `}</style>
     </div>
