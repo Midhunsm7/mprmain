@@ -50,7 +50,7 @@ const defaultSections: SidebarSection[] = [
       { name: "Bookings", link: "/bookings", shortcut: "⌘B" },
       { name: "Checkout", link: "/checkout", shortcut: "⌘C" },
       { name: "Advanced booking", link: "/bookings/advance", shortcut: "⌘D" },
-
+      { name: "GRC", link: "/print/guest-registration", shortcut: "⌘D" },
     ],
   },
   {
