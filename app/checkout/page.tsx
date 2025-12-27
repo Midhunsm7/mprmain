@@ -345,6 +345,7 @@ export default function CheckoutPage() {
         .from("room_charges")
         .select("*")
         .eq("guest_id", guest.id)
+.or("bill_generated.is.null,bill_generated.eq.false")
         .order("created_at", { ascending: false });
 
       if (!chargesError && charges) {
@@ -696,7 +697,7 @@ export default function CheckoutPage() {
     // This ensures we only show restaurant charges that were actually included in the original bill
     const restaurantCharges = guest.restaurant_charges_paid || 
       charges
-        .filter(c => c.category === 'restaurant')
+        .filter(c => c.category === 'restaurant' && !c.bill_generated)
         .reduce((sum, c) => sum + c.amount, 0);
 
     const mealPlanCharge = (isFreshenUp || guest.guest_category === 'complimentary') ? 0 : (guest.meal_plan_charge || 0);
@@ -1182,210 +1183,226 @@ export default function CheckoutPage() {
     }
   };
 
-  const doCheckout = async (guest: GuestRow) => {
-    const bill = calculateBill(guest);
-    const splits = paymentSplits[guest.id] ?? [];
-    
-    if (splits.length === 0) {
-      alert("Please add at least one payment method");
+const doCheckout = async (guest: GuestRow) => {
+  const bill = calculateBill(guest);
+  const splits = paymentSplits[guest.id] ?? [];
+  
+  if (splits.length === 0) {
+    alert("Please add at least one payment method");
+    return;
+  }
+
+  const totalPaid = splits.reduce((sum, s) => sum + s.amount, 0);
+  if (Math.abs(totalPaid - bill.balanceDue) > 0.01) {
+    alert(`Payment amount (₹${totalPaid.toFixed(2)}) must equal balance due (₹${bill.balanceDue.toFixed(2)})`);
+    return;
+  }
+
+  for (const split of splits) {
+    if (split.method !== "cash" && !split.reference) {
+      alert(`Please enter reference for ${PAYMENT_METHODS.find(p => p.value === split.method)?.label}`);
       return;
     }
+  }
 
-    const totalPaid = splits.reduce((sum, s) => sum + s.amount, 0);
-    if (Math.abs(totalPaid - bill.balanceDue) > 0.01) {
-      alert(`Payment amount (₹${totalPaid.toFixed(2)}) must equal balance due (₹${bill.balanceDue.toFixed(2)})`);
-      return;
+  const isFreshenUp = guest.guest_category === 'freshen-up';
+  
+  const confirmText = `Proceed to checkout ${guest.name}?\n\n${isFreshenUp ? 'Hourly Charges' : 'Room Charges'}: ₹${bill.computedTotal}\nRestaurant Charges: ₹${bill.restaurantCharges}\n${bill.mealPlanCharge > 0 ? `Meal Plan Charges: ₹${bill.mealPlanCharge}\n` : ''}Damage Charges: ₹${bill.totalDamageCharges}\nDiscounts: -₹${bill.totalDiscount}\nTotal: ₹${bill.totalAfterDiscount}\nAdvance Paid: ₹${bill.advanceAmount}\nBalance Due: ₹${bill.balanceDue}\n\nPayment Methods:\n${splits.map(s => `• ${PAYMENT_METHODS.find(p => p.value === s.method)?.label}: ₹${s.amount}`).join('\n')}`;
+  
+  if (!confirm(confirmText)) return;
+
+  try {
+    const payload: any = {
+      status: "checked-out",
+      check_out: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+
+    // ✅ FIXED: Track cumulative restaurant charges
+    const previousRestaurantCharges = guest.restaurant_charges_paid || 0;
+    const currentRestaurantCharges = bill.restaurantCharges;
+    const totalRestaurantChargesPaid = previousRestaurantCharges + currentRestaurantCharges;
+
+    if (totalRestaurantChargesPaid > 0) {
+      payload.restaurant_charges_paid = totalRestaurantChargesPaid;
     }
 
-    for (const split of splits) {
-      if (split.method !== "cash" && !split.reference) {
-        alert(`Please enter reference for ${PAYMENT_METHODS.find(p => p.value === split.method)?.label}`);
-        return;
-      }
+    if (!isFreshenUp || bill.extraHours > 0) {
+      payload.extra_hours = bill.extraHours;
+      payload.extra_charge = bill.defaultExtraCharge;
     }
 
-    const isFreshenUp = guest.guest_category === 'freshen-up';
-    
-    const confirmText = `Proceed to checkout ${guest.name}?\n\n${isFreshenUp ? 'Hourly Charges' : 'Room Charges'}: ₹${bill.computedTotal}\nRestaurant Charges: ₹${bill.restaurantCharges}\n${bill.mealPlanCharge > 0 ? `Meal Plan Charges: ₹${bill.mealPlanCharge}\n` : ''}Damage Charges: ₹${bill.totalDamageCharges}\nDiscounts: -₹${bill.totalDiscount}\nTotal: ₹${bill.totalAfterDiscount}\nAdvance Paid: ₹${bill.advanceAmount}\nBalance Due: ₹${bill.balanceDue}\n\nPayment Methods:\n${splits.map(s => `• ${PAYMENT_METHODS.find(p => p.value === s.method)?.label}: ₹${s.amount}`).join('\n')}`;
-    
-    if (!confirm(confirmText)) return;
+    payload.total_charge = bill.totalAfterDiscount;
 
     try {
-      const payload: any = {
-        status: "checked-out",
-        check_out: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      };
+      payload.discount_amount = bill.totalDiscount;
+      payload.damage_charges = bill.totalDamageCharges;
+    } catch (e) {
+      console.log("Optional columns not available in guests table");
+    }
 
-      // ✅ ADD RESTAURANT CHARGES TO GUEST RECORD
-      if (bill.restaurantCharges > 0) {
-        payload.restaurant_charges_paid = bill.restaurantCharges;
-      }
+    const { error: guestErr } = await supabase
+      .from("guests")
+      .update(payload)
+      .eq("id", guest.id);
 
-      if (!isFreshenUp || bill.extraHours > 0) {
-        payload.extra_hours = bill.extraHours;
-        payload.extra_charge = bill.defaultExtraCharge;
-      }
-
-      payload.total_charge = bill.totalAfterDiscount;
-
-      try {
-        payload.discount_amount = bill.totalDiscount;
-        payload.damage_charges = bill.totalDamageCharges;
-      } catch (e) {
-        console.log("Optional columns not available in guests table");
-      }
-
-      const { error: guestErr } = await supabase
+    if (guestErr) {
+      console.error("Guest update error:", guestErr);
+      delete payload.discount_amount;
+      delete payload.damage_charges;
+      
+      const { error: fallbackErr } = await supabase
         .from("guests")
         .update(payload)
         .eq("id", guest.id);
-
-      if (guestErr) {
-        console.error("Guest update error:", guestErr);
-        delete payload.discount_amount;
-        delete payload.damage_charges;
-        
-        const { error: fallbackErr } = await supabase
-          .from("guests")
-          .update(payload)
-          .eq("id", guest.id);
-        
-        if (fallbackErr) {
-          throw new Error(`Guest update failed: ${fallbackErr.message}`);
-        }
-      }
-
-      const { error: roomsErr } = await supabase
-        .from("rooms")
-        .update({ status: "housekeeping", current_guest_id: null })
-        .in("id", guest.room_ids);
-      if (roomsErr) throw new Error(`Rooms update failed: ${roomsErr.message}`);
       
-      for (const roomId of guest.room_ids) {
-        await supabase.from("housekeeping_tasks").insert({
-          room_id: roomId,
-          status: "pending",
-          created_at: new Date().toISOString(),
-        });
+      if (fallbackErr) {
+        throw new Error(`Guest update failed: ${fallbackErr.message}`);
       }
-      
-      for (const split of splits) {
-        const paymentPayload = {
-          guest_id: guest.id,
-          room_id: guest.room_ids[0],
-          amount: split.amount,
-          payment_mode: split.method,
-          upi_reference: split.method === "upi" ? split.reference : null,
-          bank_txn_id: split.method === "card" || split.method === "bank_transfer" ? split.reference : null,
-          status: "completed",
-          payment_type: "checkout",
-          notes: `Checkout payment for ${guest.name}`,
-          created_at: new Date().toISOString()
-        };
+    }
 
-        await supabase.from("payments").insert(paymentPayload);
-      }
-
-      for (const charge of bill.additionalCharges) {
-        const chargePayload = {
-          guest_id: guest.id,
-          room_id: guest.room_ids[0],
-          category: charge.type === 'discount' ? 'service' : 'other',
-          description: charge.description,
-          amount: charge.type === 'discount' ? -charge.amount : charge.amount,
-          reference_id: null,
-          created_at: new Date().toISOString(),
-          created_by: null
-        };
-
-        await supabase.from("room_charges").insert(chargePayload);
-      }
-
-      // ✅ Save restaurant charges to accounts table for historical reference
-      const accountsPayload: any = {
+    const { error: roomsErr } = await supabase
+      .from("rooms")
+      .update({ status: "housekeeping", current_guest_id: null })
+      .in("id", guest.room_ids);
+    if (roomsErr) throw new Error(`Rooms update failed: ${roomsErr.message}`);
+    
+    for (const roomId of guest.room_ids) {
+      await supabase.from("housekeeping_tasks").insert({
+        room_id: roomId,
+        status: "pending",
+        created_at: new Date().toISOString(),
+      });
+    }
+    
+    for (const split of splits) {
+      const paymentPayload = {
         guest_id: guest.id,
         room_id: guest.room_ids[0],
-        base_amount: bill.baseTotal,
-        total_amount: bill.totalAfterDiscount,
-        payment_method: splits.map(s => s.method).join("+"),
-        category: "room",
-        advance_amount: bill.advanceAmount || 0,
+        amount: split.amount,
+        payment_mode: split.method,
+        upi_reference: split.method === "upi" ? split.reference : null,
+        bank_txn_id: split.method === "card" || split.method === "bank_transfer" ? split.reference : null,
+        status: "completed",
+        payment_type: "checkout",
+        notes: `Checkout payment for ${guest.name}`,
         created_at: new Date().toISOString()
       };
 
-      if (!isFreshenUp || bill.extraHours > 0) {
-        accountsPayload.extra_hours = bill.extraHours;
-        accountsPayload.extra_charge = bill.defaultExtraCharge;
-      }
-
-      try {
-        if (bill.restaurantCharges > 0) {
-          accountsPayload.restaurant_charges = bill.restaurantCharges;
-        }
-        if (bill.mealPlanCharge > 0) {
-          accountsPayload.meal_plan_charge = bill.mealPlanCharge;
-        }
-        if (bill.totalDiscount > 0) {
-          accountsPayload.discount_amount = bill.totalDiscount;
-        }
-        if (bill.totalDamageCharges > 0) {
-          accountsPayload.damage_charges = bill.totalDamageCharges;
-        }
-        if (bill.balanceDue > 0) {
-          accountsPayload.balance_paid = bill.balanceDue;
-        }
-        if (splits.length > 0) {
-          accountsPayload.payment_details = JSON.stringify(splits);
-        }
-      } catch (e) {
-        console.log("Some optional fields not available in accounts table");
-      }
-
-      try {
-        const { error: accountsErr } = await supabase.from("accounts").insert(accountsPayload);
-        if (accountsErr) {
-          console.error("Accounts insert error details:", accountsErr);
-          const minimalPayload = {
-            guest_id: guest.id,
-            room_id: guest.room_ids[0],
-            base_amount: bill.baseTotal,
-            total_amount: bill.totalAfterDiscount,
-            payment_method: splits.map(s => s.method).join("+"),
-            created_at: new Date().toISOString(),
-            category: 'room',
-            advance_amount: bill.advanceAmount || 0
-          };
-          
-          const { error: minimalErr } = await supabase.from("accounts").insert(minimalPayload);
-          if (minimalErr) {
-            console.error("Minimal accounts insert also failed:", minimalErr);
-          }
-        }
-      } catch (accountsError) {
-        console.error("Accounts insertion failed:", accountsError);
-      }
-
-      setPaymentSplits(prev => {
-        const newSplits = { ...prev };
-        delete newSplits[guest.id];
-        return newSplits;
-      });
-
-      setAdditionalCharges(prev => {
-        const newCharges = { ...prev };
-        delete newCharges[guest.id];
-        return newCharges;
-      });
-
-      alert("✅ Checked out successfully!");
-      fetchGuests();
-
-    } catch (error: any) {
-      console.error("Checkout error:", error);
-      alert(`Checkout failed: ${error.message}`);
+      await supabase.from("payments").insert(paymentPayload);
     }
-  };
+
+    // ✅ FIXED: Mark restaurant charges as billed to prevent them from appearing again
+    const chargeIds = (roomCharges[guest.id] || [])
+      .filter(c => c.category === 'restaurant')
+      .map(c => c.id);
+    
+    if (chargeIds.length > 0) {
+      await supabase
+        .from("room_charges")
+        .update({ bill_generated: true })
+        .in("id", chargeIds);
+    }
+
+    for (const charge of bill.additionalCharges) {
+      const chargePayload = {
+        guest_id: guest.id,
+        room_id: guest.room_ids[0],
+        category: charge.type === 'discount' ? 'service' : 'other',
+        description: charge.description,
+        amount: charge.type === 'discount' ? -charge.amount : charge.amount,
+        reference_id: null,
+        created_at: new Date().toISOString(),
+        created_by: null
+      };
+
+      await supabase.from("room_charges").insert(chargePayload);
+    }
+
+    // ✅ Save restaurant charges to accounts table for historical reference
+    const accountsPayload: any = {
+      guest_id: guest.id,
+      room_id: guest.room_ids[0],
+      base_amount: bill.baseTotal,
+      total_amount: bill.totalAfterDiscount,
+      payment_method: splits.map(s => s.method).join("+"),
+      category: "room",
+      advance_amount: bill.advanceAmount || 0,
+      created_at: new Date().toISOString()
+    };
+
+    if (!isFreshenUp || bill.extraHours > 0) {
+      accountsPayload.extra_hours = bill.extraHours;
+      accountsPayload.extra_charge = bill.defaultExtraCharge;
+    }
+
+    try {
+      if (bill.restaurantCharges > 0) {
+        accountsPayload.restaurant_charges = bill.restaurantCharges;
+      }
+      if (bill.mealPlanCharge > 0) {
+        accountsPayload.meal_plan_charge = bill.mealPlanCharge;
+      }
+      if (bill.totalDiscount > 0) {
+        accountsPayload.discount_amount = bill.totalDiscount;
+      }
+      if (bill.totalDamageCharges > 0) {
+        accountsPayload.damage_charges = bill.totalDamageCharges;
+      }
+      if (bill.balanceDue > 0) {
+        accountsPayload.balance_paid = bill.balanceDue;
+      }
+      if (splits.length > 0) {
+        accountsPayload.payment_details = JSON.stringify(splits);
+      }
+    } catch (e) {
+      console.log("Some optional fields not available in accounts table");
+    }
+
+    try {
+      const { error: accountsErr } = await supabase.from("accounts").insert(accountsPayload);
+      if (accountsErr) {
+        console.error("Accounts insert error details:", accountsErr);
+        const minimalPayload = {
+          guest_id: guest.id,
+          room_id: guest.room_ids[0],
+          base_amount: bill.baseTotal,
+          total_amount: bill.totalAfterDiscount,
+          payment_method: splits.map(s => s.method).join("+"),
+          created_at: new Date().toISOString(),
+          category: 'room',
+          advance_amount: bill.advanceAmount || 0
+        };
+        
+        const { error: minimalErr } = await supabase.from("accounts").insert(minimalPayload);
+        if (minimalErr) {
+          console.error("Minimal accounts insert also failed:", minimalErr);
+        }
+      }
+    } catch (accountsError) {
+      console.error("Accounts insertion failed:", accountsError);
+    }
+
+    setPaymentSplits(prev => {
+      const newSplits = { ...prev };
+      delete newSplits[guest.id];
+      return newSplits;
+    });
+
+    setAdditionalCharges(prev => {
+      const newCharges = { ...prev };
+      delete newCharges[guest.id];
+      return newCharges;
+    });
+
+    alert("✅ Checked out successfully!");
+    fetchGuests();
+
+  } catch (error: any) {
+    console.error("Checkout error:", error);
+    alert(`Checkout failed: ${error.message}`);
+  }
+};
 
   const renderHistoricalInvoice = (guest: GuestRow, bill: any, historyBill: HistoryBill) => {
     const checkoutDate = new Date(historyBill.check_out);

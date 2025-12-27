@@ -64,7 +64,7 @@ export async function POST(req: Request) {
     );
 
     // gst rate
-    const gstRate = 0.05;
+    const gstRate = 0.0;
     const gstAmount = Number((subtotal * gstRate).toFixed(2));
     const finalTotal = Number((subtotal + gstAmount).toFixed(2));
 

@@ -17,6 +17,7 @@ import {
   EyeOff,
   Copy,
   Check,
+  Menu,
 } from "lucide-react";
 
 import CalendarPanel from "./components/CalendarPanel";
@@ -26,6 +27,7 @@ import CheckInDialog from "./components/CheckInDialog";
 import GuestList from "./components/GuestList";
 import HousekeepingList from "./components/HousekeepingList";
 import MaintenancePanel from "./components/MaintenancePanel";
+import { Sidebar, MenuButton } from "@/components/ui/sidebarbookings";
 
 const HOURLY_LATE_FEE = 200;
 
@@ -89,6 +91,7 @@ export default function BookingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showPins, setShowPins] = useState<Record<string, boolean>>({});
   const [copiedPin, setCopiedPin] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   /* ===================================================== */
   /* ================= FETCH ROOMS ====================== */
@@ -557,6 +560,15 @@ export default function BookingsPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50/20 to-emerald-50/20 p-4 lg:p-6 space-y-6">
+      {/* Sidebar */}
+      <Sidebar 
+        isOpen={sidebarOpen} 
+        onClose={() => setSidebarOpen(false)} 
+      />
+      
+      {/* Menu Button */}
+      <MenuButton onClick={() => setSidebarOpen(true)} />
+
       {/* Animated Background Elements */}
       <div className="fixed inset-0 overflow-hidden pointer-events-none">
         <div className="absolute -top-40 -right-40 w-80 h-80 bg-blue-200/20 rounded-full blur-3xl"></div>

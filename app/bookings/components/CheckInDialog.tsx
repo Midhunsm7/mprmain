@@ -62,14 +62,26 @@ interface GuestData {
 }
 
 const MEAL_PLANS = [
-  { value: "none", label: "No Meal Plan", price: 0 },
-  { value: "cp", label: "Continental Plan (CP) - Breakfast", price: 300 },
+  { 
+    value: "cp", 
+    label: "Continental Plan (CP) - Breakfast (Complimentary)", 
+    price: 0 // Changed from 300 to 0, as CP is now included
+  },
   {
     value: "map",
     label: "Modified American Plan (MAP) - Breakfast + 1 Meal",
-    price: 750,
+    price: 750
   },
-  { value: "ap", label: "American Plan (AP) - All Meals", price: 1500 },
+  { 
+    value: "ap", 
+    label: "American Plan (AP) - All Meals", 
+    price: 1500 
+  },
+  { 
+    value: "none", 
+    label: "No Meal Plan", 
+    price: 0 
+  }
 ];
 
 const GUEST_CATEGORIES = [
@@ -110,7 +122,7 @@ export default function CheckInDialog({
     days: 1,
     manualPrice: "",
     pax: 1,
-    mealPlan: "none",
+    mealPlan: "cp", // Changed default to "cp" instead of "none"
     gstin: "",
     companyName: "",
     guestCategory: "walk-in",
@@ -125,12 +137,16 @@ export default function CheckInDialog({
   const [existingGuest, setExistingGuest] = useState<GuestData | null>(null);
 
   // Calculate meal plan charge based on pax, days, and selected plan
+  // Note: CP (value: "cp") now has price 0, so it won't add extra charge
   const calculateMealPlanCharge = () => {
     if (form.guestCategory === "complimentary") return 0;
+    
     const selectedPlan = MEAL_PLANS.find(
       (plan) => plan.value === form.mealPlan
     );
     if (!selectedPlan) return 0;
+    
+    // Only MAP and AP add extra charge since CP is included in base price
     return selectedPlan.price * form.pax * form.days;
   };
 
@@ -152,6 +168,7 @@ export default function CheckInDialog({
     }
     
     // Otherwise use calculated room total + meal plan
+    // Note: calculatedTotal already includes CP breakfast for all guests
     return calculatedTotal + mealPlanCharge;
   };
 
@@ -169,7 +186,7 @@ export default function CheckInDialog({
       setForm((prev) => ({
         ...prev,
         manualPrice: "0",
-        mealPlan: "none",
+        mealPlan: "none", // Changed to "none" for complimentary
       }));
     }
     
@@ -356,7 +373,7 @@ export default function CheckInDialog({
       days: 1,
       manualPrice: "",
       pax: 1,
-      mealPlan: "none",
+      mealPlan: "cp", // Reset to CP
       gstin: "",
       companyName: "",
       guestCategory: "walk-in",
@@ -427,6 +444,11 @@ export default function CheckInDialog({
       if (value === "complimentary") {
         newForm.manualPrice = "0";
         newForm.mealPlan = "none";
+      } else {
+        // For non-complimentary, set meal plan to CP if it's currently "none"
+        if (newForm.mealPlan === "none") {
+          newForm.mealPlan = "cp";
+        }
       }
       
       // Update hours for freshen-up
@@ -712,20 +734,26 @@ export default function CheckInDialog({
                 {MEAL_PLANS.map((plan) => (
                   <SelectItem key={plan.value} value={plan.value}>
                     {plan.label}{" "}
-                    {plan.price > 0 && `- ₹${plan.price}/person/day`}
+                    {plan.value === "cp" 
+                      ? "(Included in room rate)" 
+                      : plan.price > 0 && `- Extra ₹${plan.price}/person/day`}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {form.mealPlan !== "none" &&
+            <p className="text-sm text-gray-600 mt-2">
+              <strong>Note:</strong> CP breakfast is included in the room rate for all guests. 
+              Only MAP and AP add extra charges.
+            </p>
+            {form.mealPlan !== "cp" && form.mealPlan !== "none" &&
               form.guestCategory !== "complimentary" && (
                 <div className="mt-2 p-2 bg-white rounded border border-amber-300">
                   <p className="text-sm text-gray-700">
-                    <strong>Calculation:</strong> ₹
+                    <strong>Extra Charges:</strong> ₹
                     {MEAL_PLANS.find((p) => p.value === form.mealPlan)?.price} ×{" "}
                     {form.pax} person(s) × {form.days} day(s) ={" "}
                     <strong className="text-amber-700">
-                      ₹{mealPlanCharge.toLocaleString("en-IN")}
+                      Extra ₹{mealPlanCharge.toLocaleString("en-IN")}
                     </strong>
                   </p>
                 </div>
@@ -800,21 +828,21 @@ export default function CheckInDialog({
           >
             <div className="space-y-2">
               <div className="flex justify-between text-sm">
-                <span className="text-gray-700">Room Charges:</span>
+                <span className="text-gray-700">Room Charges (includes CP):</span>
                 <span className="font-medium">
                   {form.guestCategory === "complimentary"
                     ? "₹0 (Complimentary)"
                     : `₹${calculatedTotal.toLocaleString("en-IN")}`}
                 </span>
               </div>
-              {form.mealPlan !== "none" &&
+              {form.mealPlan !== "cp" && form.mealPlan !== "none" &&
                 form.guestCategory !== "complimentary" && (
                   <div className="flex justify-between text-sm">
                     <span className="text-gray-700">
-                      Meal Plan ({form.mealPlan.toUpperCase()}):
+                      Extra Meal Plan ({form.mealPlan.toUpperCase()}):
                     </span>
                     <span className="font-medium text-amber-700">
-                      ₹{mealPlanCharge.toLocaleString("en-IN")}
+                      +₹{mealPlanCharge.toLocaleString("en-IN")}
                     </span>
                   </div>
                 )}
